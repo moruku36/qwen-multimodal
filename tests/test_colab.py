@@ -43,3 +43,46 @@ def test_parse_compute_cap():
 def test_cuda_archs_env_override(monkeypatch):
     monkeypatch.setenv("QMC_CUDA_ARCHS", "90")
     assert colab.cuda_archs() == "90"
+
+
+def test_find_free_port_skips_busy_port():
+    import socket
+
+    with socket.socket() as busy:
+        busy.bind(("0.0.0.0", 0))
+        busy.listen()
+        port = busy.getsockname()[1]
+        assert not colab.port_is_free(port)
+        assert colab.find_free_port(port) != port
+
+
+def test_shutdown_previous_closes_and_unloads():
+    class Demo:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    class Manager:
+        unloaded = False
+
+        def unload_all(self):
+            self.unloaded = True
+
+    class Store:
+        def sync(self):
+            pass
+
+        def close(self):
+            pass
+
+    class App:
+        demo = Demo()
+        manager = Manager()
+        store = Store()
+
+    prev = App()
+    colab._CURRENT_APP = prev
+    colab.shutdown_previous()
+    assert prev.demo.closed and prev.manager.unloaded
+    assert colab._CURRENT_APP is None
