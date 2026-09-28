@@ -17,6 +17,7 @@ class Intent(str, Enum):
     VISION = "vision"
     GENERATE = "generate"
     EDIT = "edit"
+    RESTORE = "restore"
 
 
 class Mode(str, Enum):
@@ -31,6 +32,9 @@ class ImageTarget(str, Enum):
     NONE = "none"
     UPLOADED = "uploaded"  # images attached to this message
     LATEST = "latest"  # most recent image in the session
+    SELECTED = "selected"  # image chosen in the lineage strip
+    NTH = "nth"  # chronological image n turns before latest
+    ROOT = "root"  # original of the selected/latest lineage
     ROOT_AND_LATEST = "root_and_latest"  # original + current (compare)
     PARENT_AND_LATEST = "parent_and_latest"  # previous revision + current (compare)
 
@@ -39,6 +43,7 @@ class ImageTarget(str, Enum):
 class RouteContext:
     has_uploads: bool = False
     has_session_image: bool = False
+    has_selected_image: bool = False
     # user turns since the last image appeared in the conversation (0 = in the previous turn)
     turns_since_last_image: int | None = None
 
@@ -49,6 +54,7 @@ class RouteDecision:
     target: ImageTarget = ImageTarget.NONE
     reason: str = ""
     compare: bool = False
+    n: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -93,6 +99,11 @@ COMPARE_WORDS = _rx(
 )
 ORIGINAL_WORDS = _rx(r"元画像", r"元の画像", r"最初の", r"オリジナル", r"original", r"first")
 PREVIOUS_WORDS = _rx(r"前の画像", r"ひとつ前", r"1つ前", r"一つ前", r"直前", r"previous", r"last one")
+TWO_BACK = _rx(r"2個前", r"ふたつ前", r"二つ前", r"two images ago")
+ONE_BACK = _rx(r"1個前", r"ひとつ前", r"一つ前", r"前の画像", r"one image ago")
+RESTORE_WORDS = _rx(
+    r"元に戻して|元に戻す|オリジナルに戻して|オリジナルに戻す", r"\brevert\b", r"undo to original"
+)
 
 RECENT_IMAGE_TURNS = 3
 
@@ -107,6 +118,26 @@ def route(text: str, ctx: RouteContext, mode: Mode | str = Mode.AUTO) -> RouteDe
     question = bool(QUESTION_WORDS.search(text))
     compare = bool(COMPARE_WORDS.search(text))
     wants_image = _wants_new_image(text)
+
+    if ctx.has_session_image and RESTORE_WORDS.search(text):
+        remaining = RESTORE_WORDS.sub("", text).strip(" 。！!？?")
+        if not remaining:
+            return RouteDecision(
+                Intent.RESTORE,
+                ImageTarget.SELECTED if ctx.has_selected_image else ImageTarget.LATEST,
+                "元画像を新しい版として復元",
+            )
+        if edit or wants_image:
+            return RouteDecision(Intent.EDIT, ImageTarget.ROOT, "元画像を編集")
+
+    if ctx.has_session_image and TWO_BACK.search(text) and not compare:
+        return RouteDecision(
+            Intent.EDIT if edit or wants_image else Intent.VISION, ImageTarget.NTH, "2個前の画像を対象", n=2
+        )
+    if ctx.has_session_image and ONE_BACK.search(text) and not compare:
+        return RouteDecision(
+            Intent.EDIT if edit or wants_image else Intent.VISION, ImageTarget.NTH, "1個前の画像を対象", n=1
+        )
 
     if ctx.has_uploads:
         if not text:
@@ -129,13 +160,29 @@ def route(text: str, ctx: RouteContext, mode: Mode | str = Mode.AUTO) -> RouteDe
     if wants_image and not _refers_to_existing(text, ctx):
         return RouteDecision(Intent.GENERATE, ImageTarget.NONE, "画像生成の依頼")
 
+    if (
+        ctx.has_selected_image
+        and edit
+        and IMAGE_REFERENCE.search(text)
+        and not _is_pure_question(text, question, edit)
+    ):
+        return RouteDecision(Intent.EDIT, ImageTarget.SELECTED, "選択画像への編集指示")
+
     recent = ctx.has_session_image and (
         ctx.turns_since_last_image is not None and ctx.turns_since_last_image <= RECENT_IMAGE_TURNS
     )
     if recent and edit and not _is_pure_question(text, question, edit):
-        return RouteDecision(Intent.EDIT, ImageTarget.LATEST, "直前の画像への追加指示")
+        return RouteDecision(
+            Intent.EDIT,
+            ImageTarget.SELECTED if ctx.has_selected_image else ImageTarget.LATEST,
+            "画像への追加指示",
+        )
     if ctx.has_session_image and question and IMAGE_REFERENCE.search(text):
-        return RouteDecision(Intent.VISION, ImageTarget.LATEST, "会話中の画像についての質問")
+        return RouteDecision(
+            Intent.VISION,
+            ImageTarget.SELECTED if ctx.has_selected_image else ImageTarget.LATEST,
+            "会話中の画像についての質問",
+        )
     if wants_image:
         return RouteDecision(Intent.GENERATE, ImageTarget.NONE, "画像生成の依頼")
     return RouteDecision(Intent.CHAT, ImageTarget.NONE, "通常のチャット")
@@ -172,7 +219,13 @@ def _is_pure_question(text: str, question: bool, edit: bool) -> bool:
 
 def _manual(mode: Mode, text: str, ctx: RouteContext) -> RouteDecision:
     has_any = ctx.has_uploads or ctx.has_session_image
-    target = ImageTarget.UPLOADED if ctx.has_uploads else ImageTarget.LATEST
+    target = (
+        ImageTarget.UPLOADED
+        if ctx.has_uploads
+        else ImageTarget.SELECTED
+        if ctx.has_selected_image
+        else ImageTarget.LATEST
+    )
     if mode is Mode.CHAT:
         return RouteDecision(
             Intent.CHAT, ImageTarget.UPLOADED if ctx.has_uploads else ImageTarget.NONE, "手動: Chat"

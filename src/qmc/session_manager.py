@@ -44,6 +44,8 @@ class ImageRecord:
 
     @property
     def caption(self) -> str:
+        if self.meta.get("pdf_page"):
+            return f"PDF {self.meta.get('pdf_name', '')} p{self.meta['pdf_page']}"
         base = {"uploaded": "アップロード画像", "generated": "生成画像", "edited": "編集画像"}[self.kind]
         rev = f" rev{self.revision}" if self.revision else ""
         prompt = self.meta.get("prompt")
@@ -253,6 +255,10 @@ class SessionManager:
     def attach_image_to_message(self, image_id: str, message_id: int) -> None:
         with self.store.tx() as c:
             c.execute("UPDATE images SET message_id = ? WHERE id = ?", (message_id, image_id))
+
+    def update_image_meta(self, image_id: str, meta: dict) -> None:
+        with self.store.tx() as c:
+            c.execute("UPDATE images SET meta = ? WHERE id = ?", (json.dumps(meta), image_id))
 
     def get_image(self, image_id: str) -> ImageRecord:
         row = self.store.query_one("SELECT * FROM images WHERE id = ?", (image_id,))

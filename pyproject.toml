@@ -15,6 +15,7 @@ dependencies = [
   "requests>=2.31",
   "numpy>=1.26",
   "ddgs>=9",
+  "pypdfium2==4.30.0",
 ]
 
 [project.optional-dependencies]

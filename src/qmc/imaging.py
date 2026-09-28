@@ -55,6 +55,58 @@ def load_user_image(path: str | Path, max_side: int = 2048, max_mb: int = 30) ->
     }
 
 
+def render_pdf_pages(
+    path: str | Path, max_pages: int = 6, max_side: int = 2048, max_mb: int = 30
+) -> list[Image.Image]:
+    """Render the first PDF pages without a system poppler install."""
+    p = Path(path)
+    if p.stat().st_size > max_mb * 1024**2:
+        raise InvalidImageError(f"PDFが大きすぎます（上限 {max_mb}MB）: {p.name}")
+    try:
+        import pypdfium2 as pdfium
+    except ImportError as exc:
+        raise InvalidImageError("PDFサポートの依存が入っていません（pypdfium2）") from exc
+    try:
+        pdf = pdfium.PdfDocument(str(p))
+        pages = []
+        try:
+            for i in range(min(len(pdf), max_pages)):
+                page = pdf[i]
+                scale = min(2.0, max_side / max(page.get_size()))
+                bitmap = page.render(scale=scale)
+                pages.append(fit_max_side(bitmap.to_pil().convert("RGB"), max_side))
+                page.close()
+        finally:
+            pdf.close()
+        if not pages:
+            raise InvalidImageError("PDFにページがありません")
+        return pages
+    except Exception as exc:
+        raise InvalidImageError(f"PDFを読み込めません: {p.name} ({exc})") from exc
+
+
+def slice_tall_image(
+    path: str | Path, max_side: int = 2048, overlap: int = 128, max_bands: int = 6
+) -> list[Image.Image]:
+    """Return overlapping readable bands of a tall screenshot, or an empty list."""
+    with Image.open(path) as source:
+        source = ImageOps.exif_transpose(source)
+        width, height = source.size
+        if height <= max_side or height / width < 2.2:
+            return []
+        if width > max_side:
+            source = source.resize((max_side, round(height * max_side / width)), Image.LANCZOS)
+        source = source.convert("RGB")
+        step = max(1, max_side - overlap)
+        starts = list(range(0, max(1, source.height - max_side + 1), step))
+        last = max(0, source.height - max_side)
+        if not starts or starts[-1] != last:
+            starts.append(last)
+        return [
+            source.crop((0, y, source.width, min(y + max_side, source.height))) for y in starts[:max_bands]
+        ]
+
+
 def _has_alpha(img: Image.Image) -> bool:
     if img.mode == "P":
         return "transparency" in img.info

@@ -17,7 +17,13 @@ from .session_manager import MessageRecord
 
 MODE_CHOICES = [("Auto", Mode.AUTO.value), ("Chat", Mode.CHAT.value), ("Vision", Mode.VISION.value),
                 ("Generate", Mode.GENERATE.value), ("Edit", Mode.EDIT.value)]  # fmt: skip
-INTENT_LABEL = {"chat": "Chat", "vision": "Vision", "generate": "Generate", "edit": "Edit"}
+INTENT_LABEL = {
+    "chat": "Chat",
+    "vision": "Vision",
+    "generate": "Generate",
+    "edit": "Edit",
+    "restore": "Restore",
+}
 STREAM_INTERVAL_S = 0.05
 
 CSS = """
@@ -88,7 +94,34 @@ def session_choices(app: App) -> list[tuple[str, str]]:
     return [(s["title"] or "(無題)", s["id"]) for s in app.sessions.list_sessions()]
 
 
-def status_markdown(app: App, content_policy: str | None = None) -> str:
+def gallery_items(lineage, image_path) -> list[tuple[str, str]]:
+    """Build Gallery values from a root-to-current image chain."""
+    return [
+        (str(image_path(image)), f"rev{image.revision}{' 元' if image.revision == 0 else ''}")
+        for image in lineage
+    ]
+
+
+def lineage_view(app: App, session_id: str | None, selected_id: str | None = None):
+    if not session_id or not app.sessions.session_exists(session_id):
+        return [], [], None, "画像はまだありません"
+    images = app.sessions.session_images(session_id)
+    if not images:
+        return [], [], None, "画像はまだありません"
+    current = next((image for image in images if image.id == selected_id), images[-1])
+    lineage = app.sessions.lineage(current.id)
+    caption = f"対象: rev{current.revision} / {current.kind} / {current.width}×{current.height} / seed {current.seed}"
+    return (
+        gallery_items(lineage, app.sessions.image_path),
+        [image.id for image in lineage],
+        current.id,
+        caption,
+    )
+
+
+def status_markdown(
+    app: App, content_policy: str | None = None, selected_image_id: str | None = None, variations: int = 1
+) -> str:
     policy = content_policy or app.cfg.content_policy
     snap = memory_snapshot()
     status = app.manager.status()
@@ -102,6 +135,7 @@ def status_markdown(app: App, content_policy: str | None = None) -> str:
         f"**Image**: {app.image_label}",
         f"**Web検索**: {app.search_label}",
         f"**コンテンツ方針**: {policy} / safesearch={resolve_safesearch(app.cfg.search_safesearch, policy)}",
+        f"**対象画像**: {(selected_image_id or 'なし')[:8]} / **バリエーション**: {variations}",
         f"**履歴**: {'Google Drive' if app.cfg.drive_mounted else '⚠️ ローカル（ランタイム終了で消えます）'}",
     ]
     lines += [f"ℹ️ {n}" for n in app.store.notes[-3:]]
@@ -111,7 +145,17 @@ def status_markdown(app: App, content_policy: str | None = None) -> str:
 
 
 def _options(
-    mode, thinking, aspect, band, steps, seed, rewrite, web_search="auto", content_policy="open"
+    mode,
+    thinking,
+    aspect,
+    band,
+    steps,
+    seed,
+    rewrite,
+    web_search="auto",
+    content_policy="open",
+    variations=1,
+    selected_image_id=None,
 ) -> TurnOptions:
     seed_val = None if seed is None or int(seed) < 0 else int(seed)
     return TurnOptions(
@@ -121,7 +165,9 @@ def _options(
         web_search=web_search or "auto",
         content_policy=content_policy or "open",
         image=ImageOptions(aspect=aspect or "1:1", band=int(band) if band else None,
-                           steps=int(steps) if steps else None, seed=seed_val),
+                           steps=int(steps) if steps else None, seed=seed_val,
+                           variations=int(variations or 1)),
+        selected_image_id=selected_image_id,
     )  # fmt: skip
 
 
@@ -167,16 +213,45 @@ def build_ui(app: App) -> gr.Blocks:
         return app.sessions.create_session()
 
     def on_submit(
-        msg, session_id, mode, thinking, web_search, content_policy, aspect, band, steps, seed, rewrite
+        msg,
+        audio_path,
+        session_id,
+        selected_id,
+        mode,
+        thinking,
+        web_search,
+        content_policy,
+        aspect,
+        band,
+        steps,
+        seed,
+        rewrite,
+        variations,
     ):
         msg = msg or {}
         text, files = msg.get("text", ""), msg.get("files", [])
+        paths = [_file_path(f) for f in files]
+        if audio_path:
+            paths.append(_file_path(audio_path))
         session_id = ensure_session(session_id)
-        opts = _options(mode, thinking, aspect, band, steps, seed, rewrite, web_search, content_policy)
-        events = app.controller.handle(session_id, text, [_file_path(f) for f in files], opts)
+        opts = _options(
+            mode,
+            thinking,
+            aspect,
+            band,
+            steps,
+            seed,
+            rewrite,
+            web_search,
+            content_policy,
+            variations,
+            selected_id,
+        )
+        events = app.controller.handle(session_id, text, paths, opts)
         for chat, route_md in stream_turn(session_id, events):
-            yield chat, gr.update(value=None), route_md, session_id, gr.update()
+            yield chat, gr.update(value=None), gr.update(value=None), route_md, session_id, gr.update()
         yield (
+            gr.update(),
             gr.update(),
             gr.update(),
             gr.update(),
@@ -185,13 +260,60 @@ def build_ui(app: App) -> gr.Blocks:
         )
 
     def on_regenerate(
-        session_id, mode, thinking, web_search, content_policy, aspect, band, steps, seed, rewrite
+        session_id,
+        selected_id,
+        mode,
+        thinking,
+        web_search,
+        content_policy,
+        aspect,
+        band,
+        steps,
+        seed,
+        rewrite,
+        variations,
     ):
         if not session_id:
             yield gr.update(), "再生成できるメッセージがありません"
             return
-        opts = _options(mode, thinking, aspect, band, steps, seed, rewrite, web_search, content_policy)
+        opts = _options(
+            mode,
+            thinking,
+            aspect,
+            band,
+            steps,
+            seed,
+            rewrite,
+            web_search,
+            content_policy,
+            variations,
+            selected_id,
+        )
         yield from stream_turn(session_id, app.controller.regenerate(session_id, opts))
+
+    def refresh_lineage(session_id):
+        return lineage_view(app, session_id)
+
+    def on_gallery_select(session_id, ids, evt: gr.SelectData):
+        if not ids or evt.index is None:
+            return None, "画像を選択できませんでした"
+        index = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+        selected = ids[int(index)]
+        return selected, lineage_view(app, session_id, selected)[3]
+
+    def on_relative(session_id, selected_id, steps_back):
+        _, ids, _, _ = lineage_view(app, session_id, selected_id)
+        if len(ids) <= steps_back:
+            return selected_id, f"{steps_back}個前の画像はありません"
+        target = ids[-1 - steps_back]
+        return target, lineage_view(app, session_id, target)[3]
+
+    def on_restore(session_id, selected_id):
+        if not session_id:
+            yield [], "画像はまだありません"
+            return
+        opts = TurnOptions(selected_image_id=selected_id, web_search="off")
+        yield from stream_turn(session_id, app.controller.handle(session_id, "元に戻して", options=opts))
 
     def on_stop():
         app.controller.cancel()
@@ -225,6 +347,9 @@ def build_ui(app: App) -> gr.Blocks:
     with gr.Blocks(title="Qwen Multimodal Chat") as demo:
         first = session_choices(app)
         session_state = gr.State(first[0][1] if first else None)
+        initial_gallery = lineage_view(app, session_state.value)
+        selected_state = gr.State(initial_gallery[2])
+        gallery_ids = gr.State(initial_gallery[1])
 
         with gr.Sidebar(open=True):
             gr.Markdown("### 💬 Qwen Multimodal")
@@ -232,6 +357,17 @@ def build_ui(app: App) -> gr.Blocks:
             sessions_radio = gr.Radio(
                 choices=first, value=first[0][1] if first else None, label="過去のチャット", interactive=True
             )
+            gr.Markdown("#### 🖼 画像の系譜")
+            lineage_gallery = gr.Gallery(
+                value=initial_gallery[0], columns=4, height=115, show_label=False, preview=False
+            )
+            selected_caption = gr.Markdown(initial_gallery[3])
+            with gr.Row():
+                target_btn = gr.Button("この画像を対象にする", size="sm")
+                restore_btn = gr.Button("元に戻す", size="sm")
+            with gr.Row():
+                previous_btn = gr.Button("1個前", size="sm")
+                two_back_btn = gr.Button("2個前を編集", size="sm")
             delete_btn = gr.Button("🗑 このチャットを削除", size="sm")
             gr.Markdown("---")
             status_md = gr.Markdown(status_markdown(app), elem_id="status-panel")
@@ -252,13 +388,18 @@ def build_ui(app: App) -> gr.Blocks:
         )
         route_md = gr.Markdown("", elem_id="route-info")
         textbox = gr.MultimodalTextbox(
-            placeholder="メッセージを入力（画像はドラッグ&ドロップ / 📎）",
-            file_types=["image"],
+            placeholder="メッセージを入力。画像は複数枚添付できます（顔・服装・構図の参照）。PDF・音声も可。",
+            file_types=["image", ".pdf", ".wav", ".mp3", ".m4a", ".webm", ".ogg"],
             file_count="multiple",
             show_label=False,
             submit_btn=True,
             autofocus=True,
         )
+        with gr.Row():
+            audio_input = gr.Audio(
+                sources=["microphone", "upload"], type="filepath", label="🎙 音声入力", scale=4
+            )
+            mic_submit_btn = gr.Button("🎙 音声を送信", size="sm", scale=1)
         with gr.Row():
             mode = gr.Radio(MODE_CHOICES, value=Mode.AUTO.value, label="モード", scale=4)
             thinking = gr.Checkbox(value=app.cfg.thinking_default, label="Thinking（深く考える）", scale=1)
@@ -289,44 +430,114 @@ def build_ui(app: App) -> gr.Blocks:
                 value=app.cfg.prompt_rewrite,
                 label="画像プロンプトの最適化（Chatモデルで英語プロンプト化）",
             )
+            variations = gr.Radio(
+                [(str(n), n) for n in (1, 4)], value=1, label="バリエーション（画像生成のみ）"
+            )
 
-        settings = [mode, thinking, web_search, content_policy, aspect, band, steps, seed, rewrite]
-        textbox.submit(
+        settings = [
+            mode,
+            thinking,
+            web_search,
+            content_policy,
+            aspect,
+            band,
+            steps,
+            seed,
+            rewrite,
+            variations,
+        ]
+        submit_inputs = [textbox, audio_input, session_state, selected_state, *settings]
+        submit_outputs = [chatbot, textbox, audio_input, route_md, session_state, sessions_radio]
+        submit_event = textbox.submit(
             on_submit,
-            [textbox, session_state, *settings],
-            [chatbot, textbox, route_md, session_state, sessions_radio],
+            submit_inputs,
+            submit_outputs,
             concurrency_id="gpu",
             concurrency_limit=1,
         )
-        regen_btn.click(
+        mic_event = mic_submit_btn.click(
+            on_submit, submit_inputs, submit_outputs, concurrency_id="gpu", concurrency_limit=1
+        )
+        regen_event = regen_btn.click(
             on_regenerate,
-            [session_state, *settings],
+            [session_state, selected_state, *settings],
             [chatbot, route_md],
             concurrency_id="gpu",
             concurrency_limit=1,
         )
+        lineage_outputs = [lineage_gallery, gallery_ids, selected_state, selected_caption]
+        submit_event.then(refresh_lineage, session_state, lineage_outputs)
+        mic_event.then(refresh_lineage, session_state, lineage_outputs)
+        regen_event.then(refresh_lineage, session_state, lineage_outputs)
+        lineage_gallery.select(
+            on_gallery_select, [session_state, gallery_ids], [selected_state, selected_caption]
+        )
+        target_btn.click(lambda selected: f"対象画像: {selected or 'なし'}", selected_state, selected_caption)
+        previous_btn.click(
+            lambda sid, selected: on_relative(sid, selected, 1),
+            [session_state, selected_state],
+            [selected_state, selected_caption],
+        )
+        two_back_btn.click(
+            lambda sid, selected: on_relative(sid, selected, 2),
+            [session_state, selected_state],
+            [selected_state, selected_caption],
+        )
+        restore_event = restore_btn.click(
+            on_restore,
+            [session_state, selected_state],
+            [chatbot, route_md],
+            concurrency_id="gpu",
+            concurrency_limit=1,
+        )
+        restore_event.then(refresh_lineage, session_state, lineage_outputs)
         stop_btn.click(on_stop, None, route_md, queue=False)
-        clear_btn.click(on_clear, session_state, [chatbot, route_md])
-        new_btn.click(on_new, None, [session_state, chatbot, sessions_radio, route_md])
-        sessions_radio.input(on_select, sessions_radio, [session_state, chatbot, route_md])
-        delete_btn.click(on_delete, session_state, [session_state, chatbot, sessions_radio])
-        refresh_btn.click(lambda p: status_markdown(app, p), content_policy, status_md)
-        content_policy.change(lambda p: status_markdown(app, p), content_policy, status_md)
+        clear_btn.click(on_clear, session_state, [chatbot, route_md]).then(
+            refresh_lineage, session_state, lineage_outputs
+        )
+        new_btn.click(on_new, None, [session_state, chatbot, sessions_radio, route_md]).then(
+            refresh_lineage, session_state, lineage_outputs
+        )
+        sessions_radio.input(on_select, sessions_radio, [session_state, chatbot, route_md]).then(
+            refresh_lineage, session_state, lineage_outputs
+        )
+        delete_btn.click(on_delete, session_state, [session_state, chatbot, sessions_radio]).then(
+            refresh_lineage, session_state, lineage_outputs
+        )
+        refresh_btn.click(
+            lambda p, selected, n: status_markdown(app, p, selected, n),
+            [content_policy, selected_state, variations],
+            status_md,
+        )
+        content_policy.change(
+            lambda p, selected, n: status_markdown(app, p, selected, n),
+            [content_policy, selected_state, variations],
+            status_md,
+        )
         unload_btn.click(on_unload, content_policy, status_md, concurrency_id="gpu", concurrency_limit=1)
-        timer.tick(lambda p: status_markdown(app, p), content_policy, status_md, show_progress="hidden")
+        timer.tick(
+            lambda p, selected, n: status_markdown(app, p, selected, n),
+            [content_policy, selected_state, variations],
+            status_md,
+            show_progress="hidden",
+        )
 
         def on_load(content_policy):
             # re-read on every page load: the list built at startup is stale after new chats
             choices = session_choices(app)
             sid = choices[0][1] if choices else None
+            view = lineage_view(app, sid)
             return (
                 sid,
                 render_history(app, sid),
                 gr.update(choices=choices, value=sid),
                 status_markdown(app, content_policy),
+                *view,
             )
 
-        demo.load(on_load, content_policy, [session_state, chatbot, sessions_radio, status_md])
+        demo.load(
+            on_load, content_policy, [session_state, chatbot, sessions_radio, status_md, *lineage_outputs]
+        )
     return demo
 
 

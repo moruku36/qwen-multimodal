@@ -55,6 +55,7 @@ class ImageOptions:
     seed: int | None = None  # None / -1 = random
     negative_prompt: str | None = None
     true_cfg_scale: float = 1.0
+    variations: int = 1
 
 
 class ImageEngine:

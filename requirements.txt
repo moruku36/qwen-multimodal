@@ -5,3 +5,4 @@ requests>=2.31
 numpy>=1.26
 # Real-time web search without an API key (DuckDuckGo & co). Tavily/Brave keys are optional.
 ddgs>=9
+pypdfium2==4.30.0

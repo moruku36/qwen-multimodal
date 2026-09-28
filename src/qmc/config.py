@@ -91,6 +91,9 @@ class AppConfig:
     max_context_messages: int = 24
     max_context_images: int = 3
     max_upload_mb: int = 30
+    pdf_max_pages: int = 6
+    asr_device: str = "cpu"
+    asr_model: str = "small"
     max_image_side: int = 2048
     server_host: str = "0.0.0.0"
     server_port: int = 7860
@@ -156,6 +159,9 @@ def load_config(**overrides) -> AppConfig:
     cfg.search_fetch_pages = _env_int("QMC_SEARCH_FETCH_PAGES", cfg.search_fetch_pages)
     cfg.search_page_chars = _env_int("QMC_SEARCH_PAGE_CHARS", cfg.search_page_chars)
     cfg.search_region = _env("QMC_SEARCH_REGION", cfg.search_region) or "jp-jp"
+    cfg.pdf_max_pages = _env_int("QMC_PDF_MAX_PAGES", cfg.pdf_max_pages)
+    cfg.asr_device = _env("QMC_ASR_DEVICE", cfg.asr_device) or "cpu"
+    cfg.asr_model = _env("QMC_ASR_MODEL", cfg.asr_model) or "small"
     cfg.share = _env_bool("QMC_SHARE", cfg.share)
     cfg.server_port = _env_int("QMC_PORT", cfg.server_port)
     cfg.auth_user = _env("QMC_AUTH_USER")

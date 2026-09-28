@@ -153,7 +153,8 @@ REWRITE_PROMPT = (
     "- generate: write one detailed English prompt (subject, composition, lighting, style). Keep any text "
     "that must appear in the image in its original language inside quotes.\n"
     "- edit: write one concise English edit instruction describing only the change to apply to the given "
-    "image, and say what must stay unchanged.\n"
+    "image, and say what must stay unchanged. There are {reference_count} reference images in attachment order; "
+    "preserve requested face, outfit, and layout from the specified references.\n"
     "Use the conversation context to resolve references like 'more', 'again', 'the background'.\n"
     "Do not sanitize adult subjects. Output the English prompt the user asked for. "
     "Never invent underage subjects.\n"
@@ -217,10 +218,17 @@ class ChatEngine:
             return []
         return text.strip().splitlines()
 
-    def rewrite_image_prompt(self, request: str, mode: str, context: list[ContextMessage]) -> str | None:
+    def rewrite_image_prompt(
+        self, request: str, mode: str, context: list[ContextMessage], reference_count: int = 1
+    ) -> str | None:
         """Ask the LLM for an English image prompt. Returns None when not possible."""
         ctx_lines = [f"{m.role}: {m.text[:300]}" for m in context[-6:] if m.text]
-        prompt = REWRITE_PROMPT.format(mode=mode, context="\n".join(ctx_lines) or "(none)", request=request)
+        prompt = REWRITE_PROMPT.format(
+            mode=mode,
+            context="\n".join(ctx_lines) or "(none)",
+            request=request,
+            reference_count=reference_count,
+        )
         try:
             with self.manager.use(CHAT) as model:
                 text = "".join(

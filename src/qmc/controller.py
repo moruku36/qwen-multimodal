@@ -10,14 +10,17 @@ import logging
 import queue
 import threading
 import time
+import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
+from .asr import ASRBackend
 from .backends.base import Cancelled, ChatParams
 from .chat_engine import ChatEngine, ContextImage, ContextMessage
-from .image_engine import ImageEngine, ImageOptions
-from .imaging import InvalidImageError, load_user_image
+from .image_engine import MAX_CONDITION_IMAGES, ImageEngine, ImageOptions
+from .imaging import InvalidImageError, load_user_image, render_pdf_pages, save_png, slice_tall_image
 from .model_manager import CHAT, IMAGE, ModelManager
 from .policy import MINOR_REFUSAL, blocks_minor_sexual_request
 from .router import ImageTarget, Intent, Mode, RouteContext, RouteDecision, route
@@ -51,6 +54,7 @@ class TurnOptions:
     prompt_rewrite: str = "auto"  # auto | on | off
     web_search: str = "on"  # auto | on | off
     content_policy: str | None = None  # None -> application default
+    selected_image_id: str | None = None
 
 
 _SENTINEL = object()
@@ -71,6 +75,8 @@ class ChatController:
         search: WebSearchEngine | None = None,
         content_policy: str = "open",
         search_safesearch: str = "auto",
+        pdf_max_pages: int = 6,
+        asr: ASRBackend | None = None,
     ):
         self.sessions = sessions
         self.manager = manager
@@ -83,6 +89,8 @@ class ChatController:
         self.search = search
         self.content_policy = content_policy
         self.search_safesearch = search_safesearch
+        self.pdf_max_pages = pdf_max_pages
+        self.asr = asr
         self.cancel_event = threading.Event()
         self._status_q: queue.Queue = queue.Queue()
         manager.on_status = self._status_q.put
@@ -107,17 +115,55 @@ class ChatController:
             return
 
         uploads: list[tuple[Any, dict]] = []
+        transcripts = []
         for f in files:
+            path = Path(f)
+            suffix = path.suffix.lower()
             try:
-                uploads.append(load_user_image(f, self.max_image_side, self.max_upload_mb))
-            except InvalidImageError as exc:
+                if suffix == ".pdf":
+                    for index, page in enumerate(
+                        render_pdf_pages(path, self.pdf_max_pages, self.max_image_side, self.max_upload_mb), 1
+                    ):
+                        uploads.append((page, {"pdf_page": index, "pdf_name": path.name}))
+                elif suffix in {".wav", ".mp3", ".m4a", ".webm", ".ogg"}:
+                    if self.asr is None:
+                        raise ValueError("音声認識のパッケージがありません")
+                    transcript = self.asr.transcribe(path)
+                    if transcript:
+                        transcripts.append(transcript)
+                elif suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".mpo"}:
+                    image, info = load_user_image(path, self.max_image_side, self.max_upload_mb)
+                    meta = {"original_size": list(info["original_size"]), "downscaled": info["downscaled"]}
+                    slices = slice_tall_image(path, self.max_image_side)
+                    if slices:
+                        rel_paths = []
+                        for index, band in enumerate(slices):
+                            rel = (
+                                Path("sessions")
+                                / session_id
+                                / "vision_slices"
+                                / f"{uuid.uuid4().hex[:8]}-{index}.png"
+                            )
+                            save_png(band, self.sessions.data_dir / rel)
+                            rel_paths.append(rel.as_posix())
+                        meta.update({"sliced": True, "bands": len(slices), "slice_paths": rel_paths})
+                    uploads.append((image, meta))
+                else:
+                    raise ValueError(f"未対応のファイル形式です: {path.name}")
+            except (InvalidImageError, ValueError, OSError, RuntimeError) as exc:
+                if "音声認識のパッケージがありません" in str(exc):
+                    yield Event("status", str(exc))
                 yield Event("error", str(exc))
+        if transcripts:
+            text = "\n".join([*transcripts, text] if text else transcripts).strip()
+            yield Event("status", f"🎙 文字起こし: {' / '.join(transcripts)}")
+        if not text and uploads and all("pdf_page" in meta for _, meta in uploads):
+            text = "この資料の内容をページ順に要約し、表や数字は省略せず書いてください。"
         if not text and not uploads:
             return
 
         user_msg_id = self.sessions.add_message(session_id, "user", text)
-        for img, info in uploads:
-            meta = {"original_size": list(info["original_size"]), "downscaled": info["downscaled"]}
+        for img, meta in uploads:
             self.sessions.add_image(session_id, img, "uploaded", message_id=user_msg_id, meta=meta)
         yield from self._run_turn(session_id, user_msg_id, options)
 
@@ -138,7 +184,11 @@ class ChatController:
         _drain(self._status_q)
         messages = self.sessions.get_messages(session_id)
         user_msg = next(m for m in messages if m.id == user_msg_id)
-        decision = route(user_msg.content, self._route_context(session_id, user_msg), options.mode)
+        decision = route(user_msg.content, self._route_context(session_id, user_msg, options), options.mode)
+        if options.selected_image_id and options.selected_image_id not in {
+            image.id for image in self.sessions.session_images(session_id)
+        }:
+            decision.warnings.append("選択した画像が見つからないため、最新の画像を使います")
         self.sessions.update_message(user_msg_id, intent=decision.intent.value)
         yield Event("route", decision)
         if blocks_minor_sexual_request(user_msg.content):
@@ -157,7 +207,9 @@ class ChatController:
         for w in decision.warnings:
             yield Event("status", w)
         try:
-            if decision.intent in (Intent.CHAT, Intent.VISION):
+            if decision.intent is Intent.RESTORE:
+                yield from self._restore(session_id, user_msg, options)
+            elif decision.intent in (Intent.CHAT, Intent.VISION):
                 yield from self._answer(session_id, user_msg, decision, options)
             else:
                 yield from self._image(session_id, user_msg, decision, options)
@@ -178,7 +230,7 @@ class ChatController:
                     log.warning("after_turn hook failed: %s", exc)
         yield Event("done", None)
 
-    def _route_context(self, session_id: str, user_msg: MessageRecord) -> RouteContext:
+    def _route_context(self, session_id: str, user_msg: MessageRecord, options: TurnOptions) -> RouteContext:
         prior = [i for i in self.sessions.session_images(session_id) if (i.message_id or 0) < user_msg.id]
         turns = None
         if prior:
@@ -189,7 +241,10 @@ class ChatController:
                 if m.role == "user" and last_img_msg < m.id < user_msg.id
             )
         return RouteContext(
-            has_uploads=bool(user_msg.images), has_session_image=bool(prior), turns_since_last_image=turns
+            has_uploads=bool(user_msg.images),
+            has_session_image=bool(prior),
+            has_selected_image=bool(options.selected_image_id),
+            turns_since_last_image=turns,
         )
 
     # ------------------------------------------------------------------ helpers
@@ -206,7 +261,12 @@ class ChatController:
         return ContextImage(img.id, str(self.sessions.image_path(img)), img.caption)
 
     def _resolve_targets(
-        self, session_id: str, user_msg: MessageRecord, target: ImageTarget
+        self,
+        session_id: str,
+        user_msg: MessageRecord,
+        target: ImageTarget,
+        selected_image_id: str | None = None,
+        n: int = 0,
     ) -> list[ImageRecord]:
         if target is ImageTarget.UPLOADED:
             return list(user_msg.images)
@@ -214,8 +274,16 @@ class ChatController:
         if not prior:
             return []
         latest = prior[-1]
+        selected = next((image for image in prior if image.id == selected_image_id), latest)
         if target is ImageTarget.LATEST:
             return [latest]
+        if target is ImageTarget.SELECTED:
+            return [selected]
+        if target is ImageTarget.NTH:
+            image = self.sessions.nth_previous_image(session_id, n)
+            return [image] if image and image.id in {item.id for item in prior} else []
+        if target is ImageTarget.ROOT:
+            return [self.sessions.lineage(selected.id)[0]]
         lineage = self.sessions.lineage(latest.id)
         if target is ImageTarget.PARENT_AND_LATEST:
             if len(lineage) >= 2:
@@ -224,6 +292,29 @@ class ChatController:
         # ROOT_AND_LATEST: original of this lineage; fall back to the first image of the session
         first = lineage[0] if len(lineage) >= 2 else prior[0]
         return [first, latest] if first.id != latest.id else [latest]
+
+    def _restore(self, session_id: str, user_msg: MessageRecord, options: TurnOptions) -> Iterator[Event]:
+        selected = self._resolve_targets(
+            session_id, user_msg, ImageTarget.SELECTED, options.selected_image_id
+        )
+        if not selected:
+            raise ValueError("復元する画像がありません")
+        current = selected[0]
+        root = self.sessions.lineage(current.id)[0]
+        summary = f"元画像に戻しました（rev{current.revision + 1}）"
+        message_id = self.sessions.add_message(
+            session_id, "assistant", summary, intent=Intent.RESTORE.value, model="コピー"
+        )
+        record = self.sessions.add_image(
+            session_id,
+            self.sessions.load_image(root),
+            "edited",
+            message_id=message_id,
+            parent_id=current.id,
+            meta={"restore": True, "restored_from": root.id},
+        )
+        yield Event("text", summary)
+        yield Event("image", {"path": str(self.sessions.image_path(record)), "id": record.id})
 
     def _pump(self, producer: Callable[[queue.Queue], None]) -> Iterator[Any]:
         """Run ``producer`` in a thread; yield its items and model-manager status messages."""
@@ -267,11 +358,31 @@ class ChatController:
             yield Event("status", "Qwen3.8-27B をロード中…（初回・モデル切替時は1〜2分かかります）")
 
         if decision.intent is Intent.VISION:
-            targets = [
-                self._ctx_image(i) for i in self._resolve_targets(session_id, user_msg, decision.target)
-            ]
+            records = self._resolve_targets(
+                session_id, user_msg, decision.target, options.selected_image_id, decision.n
+            )
+            targets = []
+            sliced_ids = set()
+            for record in records:
+                if record.meta.get("slice_paths"):
+                    sliced_ids.add(record.id)
+                    for index, rel in enumerate(record.meta["slice_paths"], 1):
+                        targets.append(
+                            ContextImage(
+                                f"{record.id}-slice-{index}",
+                                str(self.sessions.data_dir / rel),
+                                f"{record.caption} 分割 {index}",
+                            )
+                        )
+                else:
+                    targets.append(self._ctx_image(record))
             if not targets:
                 raise ValueError("対象の画像が見つかりません。画像を添付してください。")
+            if sliced_ids and history:
+                last = history[-1]
+                history[-1] = ContextMessage(
+                    last.role, last.text, [image for image in last.images if image.image_id not in sliced_ids]
+                )
             if not user_msg.content:
                 history[-1] = ContextMessage(
                     "user", "この画像について詳しく説明してください。", history[-1].images
@@ -423,9 +534,26 @@ class ChatController:
         self, session_id: str, user_msg: MessageRecord, decision: RouteDecision, options: TurnOptions
     ) -> Iterator[Event]:
         is_edit = decision.intent is Intent.EDIT
-        sources = self._resolve_targets(session_id, user_msg, decision.target) if is_edit else []
+        sources = (
+            self._resolve_targets(
+                session_id, user_msg, decision.target, options.selected_image_id, decision.n
+            )
+            if is_edit
+            else []
+        )
+        if is_edit and user_msg.images and options.selected_image_id:
+            selected = self._resolve_targets(
+                session_id, user_msg, ImageTarget.SELECTED, options.selected_image_id
+            )
+            if selected and selected[0].id not in {s.id for s in sources}:
+                sources.append(selected[0])
+        if len(sources) > MAX_CONDITION_IMAGES:
+            sources = sources[: MAX_CONDITION_IMAGES - 1] + sources[-1:]
+            yield Event("status", f"参照画像は上限{MAX_CONDITION_IMAGES}枚に絞りました")
         if is_edit and not sources:
             raise ValueError("編集する画像がありません。画像を添付するか、先に画像を生成してください。")
+        if is_edit:
+            yield Event("status", f"参照画像 {len(sources)}枚で編集します")
         instruction = user_msg.content or ("この画像を高品質に整えてください" if is_edit else "")
         if not instruction:
             raise ValueError("画像の内容を入力してください。")
@@ -435,7 +563,10 @@ class ChatController:
         if self._should_rewrite(options.prompt_rewrite):
             yield Event("status", "プロンプトを最適化中…")
             rewritten = self.chat.rewrite_image_prompt(
-                instruction, "edit" if is_edit else "generate", self._context(session_id, user_msg.id)[:-1]
+                instruction,
+                "edit" if is_edit else "generate",
+                self._context(session_id, user_msg.id)[:-1],
+                len(sources),
             )
             if (
                 rewritten
@@ -457,55 +588,95 @@ class ChatController:
         if not self.manager.is_loaded(IMAGE):
             yield Event("status", "Qwen-Image-2.1 をロード中…（初回はダウンロードで時間がかかります）")
 
-        def producer(q: queue.Queue) -> None:
-            def progress(step: int, total: int) -> None:
-                q.put(Event("status", f"{'編集' if is_edit else '生成'}中… {step}/{total} step"))
-
-            q.put(self.images.run(request, progress=progress, cancel=self.cancel_event))
-
+        variations = 1 if is_edit else max(1, min(int(options.image.variations), 4))
+        if self.images.profile.key == "l4" and variations > 2:
+            yield Event("status", "⚠️ L4で4枚生成すると時間がかかります。順番に生成します")
         t0 = time.time()
-        result = None
-        for item in self._pump(producer):
-            if isinstance(item, Event):
-                yield item
-            else:
-                result = item
-        duration = round(time.time() - t0, 2)
         image_label = getattr(self.manager.get(IMAGE), "label", IMAGE)
+        msg_id = None
+        records = []
+        for index in range(variations):
+            if self.cancel_event.is_set():
+                break
+            next_seed = request.seed if index == 0 else (request.seed + index * 7919) % (2**31)
+            current_request = replace(request, seed=next_seed)
+            if variations > 1:
+                yield Event("status", f"バリエーション {index + 1}/{variations}")
+
+            def producer(q: queue.Queue, image_request=current_request) -> None:
+                def progress(step: int, total: int) -> None:
+                    q.put(Event("status", f"{'編集' if is_edit else '生成'}中… {step}/{total} step"))
+
+                q.put(self.images.run(image_request, progress=progress, cancel=self.cancel_event))
+
+            result = None
+            try:
+                for item in self._pump(producer):
+                    if isinstance(item, Event):
+                        yield item
+                    else:
+                        result = item
+            except Cancelled:
+                if not records:
+                    raise
+                break
+            if result is None:
+                break
+            if msg_id is None:
+                msg_id = self.sessions.add_message(
+                    session_id, "assistant", "", intent=decision.intent.value, model=image_label
+                )
+            image_meta = {"prompt": instruction, "effective_prompt": effective}
+            if variations > 1:
+                image_meta.update(
+                    {"variation": index + 1, "variation_of": records[0].id if records else None}
+                )
+            parent = sources[-1] if sources else None
+            record = self.sessions.add_image(
+                session_id,
+                result,
+                "edited" if is_edit else "generated",
+                message_id=msg_id,
+                parent_id=parent.id if parent else None,
+                seed=current_request.seed,
+                meta=image_meta,
+            )
+            if variations > 1 and not records:
+                image_meta["variation_of"] = record.id
+                self.sessions.update_image_meta(record.id, image_meta)
+            records.append(record)
+            self.sessions.add_generation(
+                session_id,
+                kind="edit" if is_edit else "generate",
+                prompt=instruction,
+                effective_prompt=effective,
+                params=current_request.params_dict(),
+                model=image_label,
+                duration_s=round(time.time() - t0, 2),
+                message_id=msg_id,
+                image_id=record.id,
+                source_image_ids=[s.id for s in sources],
+            )
+            yield Event("image", {"path": str(self.sessions.image_path(record)), "id": record.id})
+        if not records:
+            return
+        duration = round(time.time() - t0, 2)
         verb = "編集" if is_edit else "生成"
-        summary = f"画像を{verb}しました（{result.width}×{result.height}, {request.steps} step, seed {request.seed}, {duration:.0f}s）"
-        msg_id = self.sessions.add_message(
-            session_id,
-            "assistant",
-            summary,
-            intent=decision.intent.value,
-            model=image_label,
-            meta={"prompt": instruction, "effective_prompt": effective, "duration_s": duration},
+        summary = (
+            f"画像を{verb}しました（{records[0].width}×{records[0].height}, "
+            f"{request.steps} step, {len(records)}枚, {duration:.0f}s）"
         )
-        parent = sources[-1] if sources else None
-        record = self.sessions.add_image(
-            session_id,
-            result,
-            "edited" if is_edit else "generated",
-            message_id=msg_id,
-            parent_id=parent.id if parent else None,
-            seed=request.seed,
-            meta={"prompt": instruction, "effective_prompt": effective},
-        )
-        self.sessions.add_generation(
-            session_id,
-            kind="edit" if is_edit else "generate",
-            prompt=instruction,
-            effective_prompt=effective,
-            params=request.params_dict(),
-            model=image_label,
-            duration_s=duration,
-            message_id=msg_id,
-            image_id=record.id,
-            source_image_ids=[s.id for s in sources],
+        self.sessions.update_message(
+            msg_id,
+            content=summary,
+            meta={
+                "prompt": instruction,
+                "effective_prompt": effective,
+                "duration_s": duration,
+                "variations": len(records),
+            },
         )
         yield Event("text", summary)
-        yield Event("image", {"path": str(self.sessions.image_path(record)), "id": record.id})
 
     def _should_rewrite(self, setting: str) -> bool:
         if setting == "off":

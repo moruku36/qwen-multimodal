@@ -103,6 +103,8 @@ def build_app(cfg: AppConfig, gpu: GPUInfo | None = None) -> App:
         manager.register(QwenImageModel(cfg, profile))
 
     chat = ChatEngine(manager, cfg.max_context_messages, cfg.max_context_images)
+    from .asr import MockASR, WhisperASR
+
     controller = ChatController(
         sessions,
         manager,
@@ -115,5 +117,7 @@ def build_app(cfg: AppConfig, gpu: GPUInfo | None = None) -> App:
         search=build_search(cfg),
         content_policy=cfg.content_policy,
         search_safesearch=cfg.search_safesearch,
+        pdf_max_pages=cfg.pdf_max_pages,
+        asr=MockASR() if cfg.mock else WhisperASR(cfg.asr_model, cfg.asr_device),
     )
     return App(cfg, gpu, profile, store, sessions, manager, controller)
