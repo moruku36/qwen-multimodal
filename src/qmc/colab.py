@@ -6,6 +6,7 @@ testable and the notebook only calls: ``setup()`` -> ``install_llama_cpp()`` -> 
 
 from __future__ import annotations
 
+import builtins
 import contextlib
 import logging
 import os
@@ -262,8 +263,7 @@ def launch(
     cfg.server_port = find_free_port(port)
     port = cfg.server_port
     app = build_app(cfg)
-    global _CURRENT_APP
-    _CURRENT_APP = app
+    _set_current_app(app)
     print(
         f"GPU: {app.gpu.name} ({app.gpu.total_gib:.0f} GiB) → {app.profile.mode} (profile={app.profile.key})"
     )
@@ -279,14 +279,23 @@ def launch(
     return app
 
 
-_CURRENT_APP = None
+# The running app is kept on ``builtins`` (not a module global) so it survives the notebook
+# purging/reimporting the ``qmc`` package after a ``git pull`` in the same kernel.
+_REGISTRY_ATTR = "_qmc_current_app"
+
+
+def _get_current_app():
+    return getattr(builtins, _REGISTRY_ATTR, None)
+
+
+def _set_current_app(app) -> None:
+    setattr(builtins, _REGISTRY_ATTR, app)
 
 
 def shutdown_previous() -> None:
     """Close the Gradio server and unload the models of a previous launch() in this kernel."""
-    global _CURRENT_APP
-    prev = _CURRENT_APP
-    _CURRENT_APP = None
+    prev = _get_current_app()
+    _set_current_app(None)
     if prev is not None:
         demo = getattr(prev, "demo", None)
         if demo is not None:
