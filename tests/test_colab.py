@@ -82,7 +82,7 @@ def test_shutdown_previous_closes_and_unloads():
         store = Store()
 
     prev = App()
-    colab._CURRENT_APP = prev
+    colab._set_current_app(prev)
     colab.shutdown_previous()
     assert prev.demo.closed and prev.manager.unloaded
-    assert colab._CURRENT_APP is None
+    assert colab._get_current_app() is None
