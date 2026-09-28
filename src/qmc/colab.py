@@ -6,9 +6,11 @@ testable and the notebook only calls: ``setup()`` -> ``install_llama_cpp()`` -> 
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
+import socket
 import subprocess
 from pathlib import Path
 
@@ -238,7 +240,14 @@ def launch(share: bool = False, mock: bool = False, port: int = 7860, profile: s
             print(
                 "   Colab Secrets に QMC_AUTH_USER / QMC_AUTH_PASSWORD を設定するとログイン必須にできます。"
             )
+    # Re-running the launch cell in the same kernel: stop the previous server and free its
+    # models first, otherwise port 7860 is taken ("Cannot find empty port") and VRAM is doubled.
+    shutdown_previous()
+    cfg.server_port = find_free_port(port)
+    port = cfg.server_port
     app = build_app(cfg)
+    global _CURRENT_APP
+    _CURRENT_APP = app
     print(
         f"GPU: {app.gpu.name} ({app.gpu.total_gib:.0f} GiB) → {app.profile.mode} (profile={app.profile.key})"
     )
@@ -252,6 +261,51 @@ def launch(share: bool = False, mock: bool = False, port: int = 7860, profile: s
     if root_path:
         _show_link(root_path)
     return app
+
+
+_CURRENT_APP = None
+
+
+def shutdown_previous() -> None:
+    """Close the Gradio server and unload the models of a previous launch() in this kernel."""
+    global _CURRENT_APP
+    prev = _CURRENT_APP
+    _CURRENT_APP = None
+    if prev is not None:
+        demo = getattr(prev, "demo", None)
+        if demo is not None:
+            with contextlib.suppress(Exception):
+                demo.close()
+        with contextlib.suppress(Exception):
+            prev.manager.unload_all()
+        with contextlib.suppress(Exception):
+            prev.store.sync()
+            prev.store.close()
+        print("♻️ 前回起動したアプリを停止しました")
+    with contextlib.suppress(Exception):
+        import gradio as gr  # noqa: PLC0415
+
+        gr.close_all()
+
+
+def port_is_free(port: int, host: str = "0.0.0.0") -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def find_free_port(preferred: int = 7860, attempts: int = 20) -> int:
+    """``preferred`` if free, otherwise the next free port (e.g. another process still holds 7860)."""
+    for candidate in range(preferred, preferred + attempts):
+        if port_is_free(candidate):
+            if candidate != preferred:
+                print(f"⚠️ ポート {preferred} は使用中のため {candidate} で起動します")
+            return candidate
+    raise OSError(f"ポート {preferred}-{preferred + attempts - 1} がすべて使用中です")
 
 
 def colab_proxy_url(port: int) -> str | None:
