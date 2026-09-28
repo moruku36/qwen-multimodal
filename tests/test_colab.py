@@ -4,10 +4,10 @@ from qmc import colab
 
 
 def test_cmake_command_builds_static_multi_arch():
-    cmd = colab.cmake_configure_cmd(Path("/src"), Path("/b"))
+    cmd = colab.cmake_configure_cmd(Path("/src"), Path("/b"), "80")
     joined = " ".join(cmd)
     assert "-DGGML_CUDA=ON" in joined
-    assert "-DCMAKE_CUDA_ARCHITECTURES=80;89;90" in joined
+    assert "-DCMAKE_CUDA_ARCHITECTURES=80" in joined
     assert "-DBUILD_SHARED_LIBS=OFF" in joined
 
 
@@ -31,3 +31,15 @@ def test_notebook_is_thin():
     assert len(code) == 4
     assert all(len(c["source"]) < 15 for c in code)
     assert not any("HF_TOKEN=" in "".join(c["source"]) for c in code)  # no secrets in the notebook
+
+
+def test_parse_compute_cap():
+    assert colab.parse_compute_cap("8.0") == "80"
+    assert colab.parse_compute_cap("8.9\n") == "89"
+    assert colab.parse_compute_cap("") is None
+    assert colab.parse_compute_cap("N/A") is None
+
+
+def test_cuda_archs_env_override(monkeypatch):
+    monkeypatch.setenv("QMC_CUDA_ARCHS", "90")
+    assert colab.cuda_archs() == "90"
