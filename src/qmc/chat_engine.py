@@ -77,7 +77,8 @@ def build_messages(
         parts: list[dict] = []
         for img in images:
             parts.append({"type": "text", "text": image_label(img)})
-            if img.image_id in pixel_budget or img.image_id in forced:
+            attach = img.image_id in pixel_budget or (is_last and img.image_id in forced)
+            if attach:
                 try:
                     parts.append(
                         {"type": "image_url", "image_url": {"url": to_data_uri(img.path, image_max_side)}}
