@@ -123,3 +123,22 @@ def test_rewrite_prompt_uses_llm():
     mm.register(MockChatModel())
     engine = ChatEngine(mm)
     assert engine.rewrite_image_prompt("猫", "generate", []).startswith("[rewritten]")
+
+
+def test_forced_images_are_not_duplicated(make_png):
+    p = make_png()
+    img = ContextImage("x", str(p), "生成画像")
+    history = [
+        ContextMessage("user", "描いて"),
+        ContextMessage("assistant", "生成しました", [img]),
+        ContextMessage("user", "違いは？"),
+    ]
+    msgs = build_messages(history, extra_images=[img])
+    n = sum(
+        1
+        for m in msgs
+        if isinstance(m["content"], list)
+        for part in m["content"]
+        if part["type"] == "image_url"
+    )
+    assert n == 1
