@@ -1,0 +1,198 @@
+"""Intent Router: decides Chat / Vision / Generate / Edit from the message + conversation state.
+
+Rule-based on purpose: deterministic, instant (no GPU / model swap needed on L4), and unit
+tested. Misroutes are handled by the manual mode selector in the UI (Auto / Chat / Vision /
+Generate / Edit), and the decision + reason is shown to the user.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+class Intent(str, Enum):
+    CHAT = "chat"
+    VISION = "vision"
+    GENERATE = "generate"
+    EDIT = "edit"
+
+
+class Mode(str, Enum):
+    AUTO = "auto"
+    CHAT = "chat"
+    VISION = "vision"
+    GENERATE = "generate"
+    EDIT = "edit"
+
+
+class ImageTarget(str, Enum):
+    NONE = "none"
+    UPLOADED = "uploaded"  # images attached to this message
+    LATEST = "latest"  # most recent image in the session
+    ROOT_AND_LATEST = "root_and_latest"  # original + current (compare)
+    PARENT_AND_LATEST = "parent_and_latest"  # previous revision + current (compare)
+
+
+@dataclass
+class RouteContext:
+    has_uploads: bool = False
+    has_session_image: bool = False
+    # user turns since the last image appeared in the conversation (0 = in the previous turn)
+    turns_since_last_image: int | None = None
+
+
+@dataclass
+class RouteDecision:
+    intent: Intent
+    target: ImageTarget = ImageTarget.NONE
+    reason: str = ""
+    compare: bool = False
+    warnings: list[str] = field(default_factory=list)
+
+
+def _rx(*words: str) -> re.Pattern:
+    return re.compile("|".join(words), re.IGNORECASE)
+
+
+IMAGE_NOUNS = _rx(
+    r"画像", r"イラスト", r"絵(?!文字)", r"写真", r"ポスター", r"ロゴ", r"アイコン", r"壁紙", r"バナー", r"サムネ",
+    r"スケッチ", r"イメージ図", r"\bimage", r"\bpicture", r"\bphoto", r"illustration", r"\blogo", r"wallpaper",
+    r"poster", r"\bicon", r"artwork",
+)  # fmt: skip
+DRAW_VERBS = _rx(
+    r"描いて", r"描け", r"描く", r"描き", r"\bdraw", r"\bpaint", r"illustrate", r"sketch", r"render",
+)  # fmt: skip
+MAKE_VERBS = _rx(r"生成", r"作って", r"作成", r"つくって", r"出して", r"\bgenerate", r"\bcreate", r"\bmake")
+# Things that are generated but are not images
+TEXT_ARTIFACTS = _rx(
+    r"コード", r"文章", r"テキスト", r"スクリプト", r"関数", r"SQL", r"メール", r"要約", r"JSON", r"YAML", r"正規表現",
+    r"データを", r"テストデータ", r"サンプルデータ", r"表を", r"リスト", r"プログラム", r"クラス", r"README", r"手順",
+    r"パスワード", r"\bcode", r"\bscript", r"\bfunction", r"\bemail", r"\bsummary", r"\bregex", r"\btable",
+)  # fmt: skip
+EDIT_WORDS = _rx(
+    r"変更", r"変えて", r"かえて", r"編集", r"消して", r"削除", r"除去", r"取り除", r"追加", r"加えて", r"足して",
+    r"増やして", r"減らして", r"明るく", r"暗く", r"濃く", r"薄く", r"鮮やか", r"背景", r"色を", r"色に", r"差し替え",
+    r"置き換え", r"入れ替え", r"にして", r"風に", r"っぽく", r"らしく", r"もう少し", r"もっと", r"少し", r"修正", r"直して",
+    r"大きく", r"小さく", r"塗り", r"着せ", r"かぶせ", r"元に戻", r"透明",
+    r"\bedit", r"\bchange", r"\breplace", r"\bremove", r"\badd\b", r"make it", r"\bmore\b", r"\bless\b",
+    r"brighter", r"darker", r"background", r"\bturn (it|the)",
+)  # fmt: skip
+QUESTION_WORDS = _rx(
+    r"何", r"なに", r"なん", r"どこ", r"どれ", r"誰", r"だれ", r"いくつ", r"何個", r"どう", r"どんな", r"なぜ", r"教えて",
+    r"説明", r"読んで", r"読み取", r"書いてある", r"写って", r"映って", r"判定", r"評価", r"分析", r"確認して", r"？", r"\?",
+    r"\bwhat", r"\bwhere", r"\bwho", r"\bhow", r"\bwhy", r"describe", r"explain", r"\bread\b", r"identify",
+)  # fmt: skip
+IMAGE_REFERENCE = _rx(
+    r"この画像", r"その画像", r"さっきの", r"今の画像", r"生成した", r"作った画像", r"編集した", r"元画像", r"元の画像",
+    r"前の画像", r"画像", r"写真", r"イラスト", r"絵", r"this image", r"the image", r"that image", r"the picture",
+)  # fmt: skip
+COMPARE_WORDS = _rx(
+    r"違い", r"比較", r"比べ", r"差分", r"変化", r"変わった", r"difference", r"compare", r"diff\b"
+)
+ORIGINAL_WORDS = _rx(r"元画像", r"元の画像", r"最初の", r"オリジナル", r"original", r"first")
+PREVIOUS_WORDS = _rx(r"前の画像", r"ひとつ前", r"1つ前", r"一つ前", r"直前", r"previous", r"last one")
+
+RECENT_IMAGE_TURNS = 3
+
+
+def route(text: str, ctx: RouteContext, mode: Mode | str = Mode.AUTO) -> RouteDecision:
+    mode = Mode(mode)
+    text = (text or "").strip()
+    if mode is not Mode.AUTO:
+        return _manual(mode, text, ctx)
+
+    edit = bool(EDIT_WORDS.search(text))
+    question = bool(QUESTION_WORDS.search(text))
+    compare = bool(COMPARE_WORDS.search(text))
+    wants_image = _wants_new_image(text)
+
+    if ctx.has_uploads:
+        if not text:
+            return RouteDecision(Intent.VISION, ImageTarget.UPLOADED, "画像のみ添付 → 画像の説明")
+        if compare:
+            return RouteDecision(Intent.VISION, ImageTarget.UPLOADED, "添付画像の比較", compare=True)
+        if (edit or wants_image) and not _is_pure_question(text, question, edit):
+            return RouteDecision(Intent.EDIT, ImageTarget.UPLOADED, "添付画像 + 編集/生成の指示")
+        return RouteDecision(Intent.VISION, ImageTarget.UPLOADED, "添付画像についての質問")
+
+    if compare and ctx.has_session_image:
+        if PREVIOUS_WORDS.search(text) and not ORIGINAL_WORDS.search(text):
+            return RouteDecision(
+                Intent.VISION, ImageTarget.PARENT_AND_LATEST, "直前の画像と比較", compare=True
+            )
+        return RouteDecision(
+            Intent.VISION, ImageTarget.ROOT_AND_LATEST, "元画像と現在の画像を比較", compare=True
+        )
+
+    if wants_image and not _refers_to_existing(text, ctx):
+        return RouteDecision(Intent.GENERATE, ImageTarget.NONE, "画像生成の依頼")
+
+    recent = ctx.has_session_image and (
+        ctx.turns_since_last_image is not None and ctx.turns_since_last_image <= RECENT_IMAGE_TURNS
+    )
+    if recent and edit and not _is_pure_question(text, question, edit):
+        return RouteDecision(Intent.EDIT, ImageTarget.LATEST, "直前の画像への追加指示")
+    if ctx.has_session_image and question and IMAGE_REFERENCE.search(text):
+        return RouteDecision(Intent.VISION, ImageTarget.LATEST, "会話中の画像についての質問")
+    if wants_image:
+        return RouteDecision(Intent.GENERATE, ImageTarget.NONE, "画像生成の依頼")
+    return RouteDecision(Intent.CHAT, ImageTarget.NONE, "通常のチャット")
+
+
+def _wants_new_image(text: str) -> bool:
+    if DRAW_VERBS.search(text):
+        return True
+    if MAKE_VERBS.search(text):
+        if IMAGE_NOUNS.search(text):
+            return True
+        # "…を生成して" with no text artifact mentioned (e.g. "未来的なデータセンターを生成して")
+        return bool(
+            re.search(r"生成して|生成する|generate", text, re.IGNORECASE)
+        ) and not TEXT_ARTIFACTS.search(text)
+    return False
+
+
+def _refers_to_existing(text: str, ctx: RouteContext) -> bool:
+    return ctx.has_session_image and bool(
+        re.search(r"この画像|その画像|さっきの|今の画像|this image|that image", text)
+    )
+
+
+def _is_pure_question(text: str, question: bool, edit: bool) -> bool:
+    """'背景は何色？' is a question even though it contains an edit keyword."""
+    if not question:
+        return False
+    imperative = re.search(
+        r"(して|てください|にして|して下さい|please|can you|could you)", text, re.IGNORECASE
+    )
+    return not imperative
+
+
+def _manual(mode: Mode, text: str, ctx: RouteContext) -> RouteDecision:
+    has_any = ctx.has_uploads or ctx.has_session_image
+    target = ImageTarget.UPLOADED if ctx.has_uploads else ImageTarget.LATEST
+    if mode is Mode.CHAT:
+        return RouteDecision(
+            Intent.CHAT, ImageTarget.UPLOADED if ctx.has_uploads else ImageTarget.NONE, "手動: Chat"
+        )
+    if mode is Mode.GENERATE:
+        # attached images act as references for image-conditioned generation
+        if ctx.has_uploads:
+            return RouteDecision(Intent.EDIT, ImageTarget.UPLOADED, "手動: Generate（添付画像を参照）")
+        return RouteDecision(Intent.GENERATE, ImageTarget.NONE, "手動: Generate")
+    if not has_any:
+        return RouteDecision(
+            Intent.CHAT,
+            ImageTarget.NONE,
+            f"手動: {mode.value} → 画像が無いため Chat",
+            warnings=["対象の画像がありません。画像を添付するか先に生成してください。"],
+        )
+    if mode is Mode.VISION:
+        if COMPARE_WORDS.search(text) and not ctx.has_uploads:
+            return RouteDecision(
+                Intent.VISION, ImageTarget.ROOT_AND_LATEST, "手動: Vision（比較）", compare=True
+            )
+        return RouteDecision(Intent.VISION, target, "手動: Vision")
+    return RouteDecision(Intent.EDIT, target, "手動: Edit")
