@@ -11,6 +11,7 @@ from .app import App
 from .controller import Event, TurnOptions
 from .gpu_manager import memory_snapshot
 from .image_engine import ASPECT_RATIOS, BANDS, ImageOptions
+from .imaging import mask_from_editor
 from .router import Mode
 from .search_engine import resolve_safesearch
 from .session_manager import MessageRecord
@@ -27,8 +28,9 @@ INTENT_LABEL = {
 STREAM_INTERVAL_S = 0.05
 
 CSS = """
-#status-panel {font-size: 0.85em}
+#status-panel {font-size: 0.82em}
 #route-info {min-height: 1.5em; font-size: 0.85em; opacity: 0.8}
+#chat-panel {border: 0 !important; box-shadow: none !important}
 footer {display: none !important}
 """
 
@@ -97,7 +99,12 @@ def session_choices(app: App) -> list[tuple[str, str]]:
 def gallery_items(lineage, image_path) -> list[tuple[str, str]]:
     """Build Gallery values from a root-to-current image chain."""
     return [
-        (str(image_path(image)), f"rev{image.revision}{' 元' if image.revision == 0 else ''}")
+        (
+            str(image_path(image)),
+            f"var{getattr(image, 'meta', {}).get('variation')}"
+            if getattr(image, "meta", {}).get("variation")
+            else f"rev{image.revision}{' 元' if image.revision == 0 else ''}",
+        )
         for image in lineage
     ]
 
@@ -110,6 +117,11 @@ def lineage_view(app: App, session_id: str | None, selected_id: str | None = Non
         return [], [], None, "画像はまだありません"
     current = next((image for image in images if image.id == selected_id), images[-1])
     lineage = app.sessions.lineage(current.id)
+    siblings = app.sessions.variation_siblings(current)
+    if siblings:
+        lineage = [image for image in lineage if image.id not in {s.id for s in siblings}] + siblings
+        if selected_id is None:
+            current = siblings[0]
     caption = f"対象: rev{current.revision} / {current.kind} / {current.width}×{current.height} / seed {current.seed}"
     return (
         gallery_items(lineage, app.sessions.image_path),
@@ -177,7 +189,7 @@ def build_ui(app: App) -> gr.Blocks:
     bands = [b for b in BANDS if b <= profile.image_max_band]
     default_band = min(app.cfg.image.default_band, profile.image_max_band)
 
-    def stream_turn(session_id: str, events: Iterator[Event]):
+    def stream_turn(session_id: str, events: Iterator[Event], read_aloud: bool = False):
         base = render_history(app, session_id)
         reasoning, text, status, errors = "", "", "", []
         route_md = ""
@@ -201,11 +213,14 @@ def build_ui(app: App) -> gr.Blocks:
             if ev.kind in ("reasoning", "text") and now - last < STREAM_INTERVAL_S:
                 continue
             last = now
-            yield base + pending_messages(reasoning, text, status, errors), route_md
+            yield base + pending_messages(reasoning, text, status, errors), route_md, gr.update()
         final = render_history(app, session_id)
         if errors and not any("エラー" in str(m.get("content")) for m in final[-1:]):
             final += pending_messages("", "", "", errors)
-        yield final, route_md
+        audio_path = app.controller.read_last_answer(session_id) if read_aloud else None
+        if app.controller.last_tts_error and read_aloud:
+            route_md += f" · {app.controller.last_tts_error}"
+        yield final, route_md, gr.update(value=audio_path)
 
     def ensure_session(session_id):
         if session_id and app.sessions.session_exists(session_id):
@@ -227,6 +242,9 @@ def build_ui(app: App) -> gr.Blocks:
         seed,
         rewrite,
         variations,
+        read_aloud,
+        mask_enabled,
+        mask_editor,
     ):
         msg = msg or {}
         text, files = msg.get("text", ""), msg.get("files", [])
@@ -247,9 +265,20 @@ def build_ui(app: App) -> gr.Blocks:
             variations,
             selected_id,
         )
+        if mask_enabled and selected_id:
+            selected = app.sessions.get_image(selected_id)
+            opts.mask_image = mask_from_editor(mask_editor, (selected.width, selected.height))
         events = app.controller.handle(session_id, text, paths, opts)
-        for chat, route_md in stream_turn(session_id, events):
-            yield chat, gr.update(value=None), gr.update(value=None), route_md, session_id, gr.update()
+        for chat, route_md, speech in stream_turn(session_id, events, read_aloud):
+            yield (
+                chat,
+                gr.update(value=None),
+                gr.update(value=None),
+                route_md,
+                session_id,
+                gr.update(),
+                speech,
+            )
         yield (
             gr.update(),
             gr.update(),
@@ -257,6 +286,7 @@ def build_ui(app: App) -> gr.Blocks:
             gr.update(),
             session_id,
             gr.update(choices=session_choices(app), value=session_id),
+            gr.update(),
         )
 
     def on_regenerate(
@@ -272,9 +302,10 @@ def build_ui(app: App) -> gr.Blocks:
         seed,
         rewrite,
         variations,
+        read_aloud,
     ):
         if not session_id:
-            yield gr.update(), "再生成できるメッセージがありません"
+            yield gr.update(), "再生成できるメッセージがありません", gr.update()
             return
         opts = _options(
             mode,
@@ -289,28 +320,40 @@ def build_ui(app: App) -> gr.Blocks:
             variations,
             selected_id,
         )
-        yield from stream_turn(session_id, app.controller.regenerate(session_id, opts))
+        yield from stream_turn(session_id, app.controller.regenerate(session_id, opts), read_aloud)
 
     def refresh_lineage(session_id):
-        return lineage_view(app, session_id)
+        view = lineage_view(app, session_id)
+        selected = app.sessions.get_image(view[2]) if view[2] else None
+        return (*view, gr.update(value=str(app.sessions.image_path(selected)) if selected else None))
 
     def on_gallery_select(session_id, ids, evt: gr.SelectData):
         if not ids or evt.index is None:
-            return None, "画像を選択できませんでした"
+            return None, "画像を選択できませんでした", gr.update()
         index = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
         selected = ids[int(index)]
-        return selected, lineage_view(app, session_id, selected)[3]
+        return (
+            selected,
+            lineage_view(app, session_id, selected)[3],
+            gr.update(value=str(app.sessions.image_path(app.sessions.get_image(selected)))),
+        )
 
     def on_relative(session_id, selected_id, steps_back):
-        _, ids, _, _ = lineage_view(app, session_id, selected_id)
-        if len(ids) <= steps_back:
-            return selected_id, f"{steps_back}個前の画像はありません"
-        target = ids[-1 - steps_back]
-        return target, lineage_view(app, session_id, target)[3]
+        if not selected_id:
+            return selected_id, f"{steps_back}個前の画像はありません", gr.update()
+        lineage = app.sessions.lineage(selected_id)
+        if len(lineage) <= steps_back:
+            return selected_id, f"{steps_back}個前の画像はありません", gr.update()
+        target = lineage[-1 - steps_back].id
+        return (
+            target,
+            lineage_view(app, session_id, target)[3],
+            gr.update(value=str(app.sessions.image_path(app.sessions.get_image(target)))),
+        )
 
     def on_restore(session_id, selected_id):
         if not session_id:
-            yield [], "画像はまだありません"
+            yield [], "画像はまだありません", gr.update()
             return
         opts = TurnOptions(selected_image_id=selected_id, web_search="off")
         yield from stream_turn(session_id, app.controller.handle(session_id, "元に戻して", options=opts))
@@ -344,7 +387,11 @@ def build_ui(app: App) -> gr.Blocks:
         app.manager.unload_all()
         return status_markdown(app, content_policy)
 
-    with gr.Blocks(title="Qwen Multimodal Chat") as demo:
+    with gr.Blocks(
+        title="Qwen Multimodal Chat",
+        theme=gr.themes.Base(primary_hue="fuchsia", neutral_hue="slate"),
+        css=CSS,
+    ) as demo:
         first = session_choices(app)
         session_state = gr.State(first[0][1] if first else None)
         initial_gallery = lineage_view(app, session_state.value)
@@ -352,7 +399,7 @@ def build_ui(app: App) -> gr.Blocks:
         gallery_ids = gr.State(initial_gallery[1])
 
         with gr.Sidebar(open=True):
-            gr.Markdown("### 💬 Qwen Multimodal")
+            gr.Markdown("### Qwen Studio")
             new_btn = gr.Button("＋ New Chat", variant="primary")
             sessions_radio = gr.Radio(
                 choices=first, value=first[0][1] if first else None, label="過去のチャット", interactive=True
@@ -363,17 +410,17 @@ def build_ui(app: App) -> gr.Blocks:
             )
             selected_caption = gr.Markdown(initial_gallery[3])
             with gr.Row():
-                target_btn = gr.Button("この画像を対象にする", size="sm")
                 restore_btn = gr.Button("元に戻す", size="sm")
             with gr.Row():
                 previous_btn = gr.Button("1個前", size="sm")
                 two_back_btn = gr.Button("2個前を編集", size="sm")
             delete_btn = gr.Button("🗑 このチャットを削除", size="sm")
             gr.Markdown("---")
-            status_md = gr.Markdown(status_markdown(app), elem_id="status-panel")
-            with gr.Row():
-                refresh_btn = gr.Button("↻ 状態更新", size="sm")
-                unload_btn = gr.Button("⏏ モデル解放", size="sm")
+            with gr.Accordion("システム状態", open=False):
+                status_md = gr.Markdown(status_markdown(app), elem_id="status-panel")
+                with gr.Row():
+                    refresh_btn = gr.Button("状態更新", size="sm")
+                    unload_btn = gr.Button("モデル解放", size="sm")
             timer = gr.Timer(5.0)
 
         if app.cfg.share:
@@ -385,11 +432,12 @@ def build_ui(app: App) -> gr.Blocks:
             buttons=["copy"],
             placeholder="何でも聞いてね。画像を添付すると理解・編集、「〜を描いて」で画像生成、「最新の〜」はWeb検索します。",
             allow_file_downloads=True,
+            elem_id="chat-panel",
         )
         route_md = gr.Markdown("", elem_id="route-info")
         textbox = gr.MultimodalTextbox(
-            placeholder="メッセージを入力。画像は複数枚添付できます（顔・服装・構図の参照）。PDF・音声も可。",
-            file_types=["image", ".pdf", ".wav", ".mp3", ".m4a", ".webm", ".ogg"],
+            placeholder="メッセージを入力。画像・PDF・短い動画も添付できます。",
+            file_types=["image", ".pdf", ".wav", ".mp3", ".m4a", ".webm", ".ogg", ".mp4", ".mov", ".mkv"],
             file_count="multiple",
             show_label=False,
             submit_btn=True,
@@ -400,20 +448,21 @@ def build_ui(app: App) -> gr.Blocks:
                 sources=["microphone", "upload"], type="filepath", label="🎙 音声入力", scale=4
             )
             mic_submit_btn = gr.Button("🎙 音声を送信", size="sm", scale=1)
+        speech_output = gr.Audio(label="読み上げ", autoplay=True, interactive=False)
         with gr.Row():
-            mode = gr.Radio(MODE_CHOICES, value=Mode.AUTO.value, label="モード", scale=4)
             thinking = gr.Checkbox(value=app.cfg.thinking_default, label="Thinking（深く考える）", scale=1)
+            read_aloud = gr.Checkbox(value=app.cfg.tts, label="読み上げ", scale=1)
+        with gr.Accordion("詳細設定", open=False):
+            mode = gr.Radio(MODE_CHOICES, value=Mode.AUTO.value, label="モード")
             web_search = gr.Radio(
                 [("自動", "auto"), ("常に", "on"), ("オフ", "off")],
                 value=app.cfg.web_search,
                 label="🌐 Web検索（最新情報）",
-                scale=2,
             )
             content_policy = gr.Radio(
                 [("開放", "open"), ("標準", "standard")],
                 value=app.cfg.content_policy,
                 label="コンテンツ方針",
-                scale=2,
             )
         with gr.Row():
             stop_btn = gr.Button("⏹ Stop", size="sm")
@@ -433,6 +482,15 @@ def build_ui(app: App) -> gr.Blocks:
             variations = gr.Radio(
                 [(str(n), n) for n in (1, 4)], value=1, label="バリエーション（画像生成のみ）"
             )
+        with gr.Accordion("マスクで編集", open=False):
+            mask_enabled = gr.Checkbox(label="マスクを使う", value=False)
+            mask_editor = gr.ImageEditor(
+                value=str(app.sessions.image_path(app.sessions.get_image(initial_gallery[2])))
+                if initial_gallery[2]
+                else None,
+                type="pil",
+                label="編集する部分を塗る",
+            )
 
         settings = [
             mode,
@@ -446,8 +504,25 @@ def build_ui(app: App) -> gr.Blocks:
             rewrite,
             variations,
         ]
-        submit_inputs = [textbox, audio_input, session_state, selected_state, *settings]
-        submit_outputs = [chatbot, textbox, audio_input, route_md, session_state, sessions_radio]
+        submit_inputs = [
+            textbox,
+            audio_input,
+            session_state,
+            selected_state,
+            *settings,
+            read_aloud,
+            mask_enabled,
+            mask_editor,
+        ]
+        submit_outputs = [
+            chatbot,
+            textbox,
+            audio_input,
+            route_md,
+            session_state,
+            sessions_radio,
+            speech_output,
+        ]
         submit_event = textbox.submit(
             on_submit,
             submit_inputs,
@@ -460,33 +535,32 @@ def build_ui(app: App) -> gr.Blocks:
         )
         regen_event = regen_btn.click(
             on_regenerate,
-            [session_state, selected_state, *settings],
-            [chatbot, route_md],
+            [session_state, selected_state, *settings, read_aloud],
+            [chatbot, route_md, speech_output],
             concurrency_id="gpu",
             concurrency_limit=1,
         )
-        lineage_outputs = [lineage_gallery, gallery_ids, selected_state, selected_caption]
+        lineage_outputs = [lineage_gallery, gallery_ids, selected_state, selected_caption, mask_editor]
         submit_event.then(refresh_lineage, session_state, lineage_outputs)
         mic_event.then(refresh_lineage, session_state, lineage_outputs)
         regen_event.then(refresh_lineage, session_state, lineage_outputs)
         lineage_gallery.select(
-            on_gallery_select, [session_state, gallery_ids], [selected_state, selected_caption]
+            on_gallery_select, [session_state, gallery_ids], [selected_state, selected_caption, mask_editor]
         )
-        target_btn.click(lambda selected: f"対象画像: {selected or 'なし'}", selected_state, selected_caption)
         previous_btn.click(
             lambda sid, selected: on_relative(sid, selected, 1),
             [session_state, selected_state],
-            [selected_state, selected_caption],
+            [selected_state, selected_caption, mask_editor],
         )
         two_back_btn.click(
             lambda sid, selected: on_relative(sid, selected, 2),
             [session_state, selected_state],
-            [selected_state, selected_caption],
+            [selected_state, selected_caption, mask_editor],
         )
         restore_event = restore_btn.click(
             on_restore,
             [session_state, selected_state],
-            [chatbot, route_md],
+            [chatbot, route_md, speech_output],
             concurrency_id="gpu",
             concurrency_limit=1,
         )
@@ -526,7 +600,7 @@ def build_ui(app: App) -> gr.Blocks:
             # re-read on every page load: the list built at startup is stale after new chats
             choices = session_choices(app)
             sid = choices[0][1] if choices else None
-            view = lineage_view(app, sid)
+            view = refresh_lineage(sid)
             return (
                 sid,
                 render_history(app, sid),

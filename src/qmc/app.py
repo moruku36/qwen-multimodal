@@ -90,20 +90,31 @@ def build_app(cfg: AppConfig, gpu: GPUInfo | None = None) -> App:
 
     manager = ModelManager(profile=profile)
     if cfg.mock:
-        from .backends.mock import MockChatModel, MockImageModel
+        from .backends.mock import MockChatModel
 
         manager.register(MockChatModel(load_delay=0.3, token_delay=0.01))
-        manager.register(MockImageModel(load_delay=0.3, step_delay=0.02))
     else:
         from .backends.llama_server import LlamaServerModel, RemoteChatModel
-        from .backends.qwen_image import QwenImageModel
 
         chat_model = RemoteChatModel(cfg) if cfg.chat.remote_base_url else LlamaServerModel(cfg, profile)
         manager.register(chat_model)
+
+    if cfg.image.remote_base_url:
+        from .backends.image_http import HttpImageModel
+
+        manager.register(HttpImageModel(cfg.image.remote_base_url, cfg.image.remote_api_key))
+    elif cfg.mock:
+        from .backends.mock import MockImageModel
+
+        manager.register(MockImageModel(load_delay=0.3, step_delay=0.02))
+    else:
+        from .backends.qwen_image import QwenImageModel
+
         manager.register(QwenImageModel(cfg, profile))
 
     chat = ChatEngine(manager, cfg.max_context_messages, cfg.max_context_images)
     from .asr import MockASR, WhisperASR
+    from .tts import EdgeTTS, MockTTS
 
     controller = ChatController(
         sessions,
@@ -118,6 +129,9 @@ def build_app(cfg: AppConfig, gpu: GPUInfo | None = None) -> App:
         content_policy=cfg.content_policy,
         search_safesearch=cfg.search_safesearch,
         pdf_max_pages=cfg.pdf_max_pages,
+        video_max_seconds=cfg.video_max_seconds,
+        video_max_mb=cfg.video_max_mb,
         asr=MockASR() if cfg.mock else WhisperASR(cfg.asr_model, cfg.asr_device),
+        tts=MockTTS() if cfg.mock else EdgeTTS(cfg.tts_voice),
     )
     return App(cfg, gpu, profile, store, sessions, manager, controller)

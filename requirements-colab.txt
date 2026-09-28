@@ -13,3 +13,4 @@ safetensors
 torchao>=0.13
 huggingface_hub>=1.0
 faster-whisper>=1,<2
+edge-tts>=6,<8

@@ -34,6 +34,7 @@ class ImageTarget(str, Enum):
     LATEST = "latest"  # most recent image in the session
     SELECTED = "selected"  # image chosen in the lineage strip
     NTH = "nth"  # chronological image n turns before latest
+    VARIATION = "variation"  # 1-based sibling in a multi-variation assistant turn
     ROOT = "root"  # original of the selected/latest lineage
     ROOT_AND_LATEST = "root_and_latest"  # original + current (compare)
     PARENT_AND_LATEST = "parent_and_latest"  # previous revision + current (compare)
@@ -101,6 +102,10 @@ ORIGINAL_WORDS = _rx(r"元画像", r"元の画像", r"最初の", r"オリジナ
 PREVIOUS_WORDS = _rx(r"前の画像", r"ひとつ前", r"1つ前", r"一つ前", r"直前", r"previous", r"last one")
 TWO_BACK = _rx(r"2個前", r"ふたつ前", r"二つ前", r"two images ago")
 ONE_BACK = _rx(r"1個前", r"ひとつ前", r"一つ前", r"前の画像", r"one image ago")
+VARIATION_WORDS = re.compile(
+    r"([1-4])(?:枚目|番目|つ目)|バリエーション\s*([1-4])|variation\s*([1-4])", re.IGNORECASE
+)
+THIS_IMAGE = _rx(r"これを編集", r"これを変えて", r"edit this")
 RESTORE_WORDS = _rx(
     r"元に戻して|元に戻す|オリジナルに戻して|オリジナルに戻す", r"\brevert\b", r"undo to original"
 )
@@ -118,6 +123,14 @@ def route(text: str, ctx: RouteContext, mode: Mode | str = Mode.AUTO) -> RouteDe
     question = bool(QUESTION_WORDS.search(text))
     compare = bool(COMPARE_WORDS.search(text))
     wants_image = _wants_new_image(text)
+
+    variation = VARIATION_WORDS.search(text)
+    if ctx.has_session_image and variation and not question:
+        number = next(int(group) for group in variation.groups() if group)
+        intent = Intent.EDIT if edit or wants_image else Intent.VISION
+        return RouteDecision(intent, ImageTarget.VARIATION, f"バリエーション{number}を対象", n=number)
+    if ctx.has_selected_image and THIS_IMAGE.search(text):
+        return RouteDecision(Intent.EDIT, ImageTarget.SELECTED, "選択画像を編集")
 
     if ctx.has_session_image and RESTORE_WORDS.search(text):
         remaining = RESTORE_WORDS.sub("", text).strip(" 。！!？?")

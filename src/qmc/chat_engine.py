@@ -71,6 +71,7 @@ def build_messages(
     max_images: int = 3,
     image_max_side: int = 1280,
     extra_images: list[ContextImage] | None = None,
+    max_text_chars: int = 14000,
 ) -> list[dict]:
     """Convert history into OpenAI chat messages.
 
@@ -81,7 +82,22 @@ def build_messages(
       because the chat template only accepts images from the user
     - ``extra_images`` are always attached to the last user message (explicit Vision targets)
     """
-    msgs = history[-max_messages:]
+    # Keep recent turns within a conservative context budget. The full history stays in SQLite.
+    # Search citations and image labels can make a fixed message count exceed llama.cpp -c.
+    remaining = max_text_chars
+    msgs: list[ContextMessage] = []
+    for original in reversed(history[-max_messages:]):
+        if remaining <= 0 and msgs:
+            break
+        allowance = min(3000, max(500, remaining)) if not msgs else min(3000, remaining)
+        excerpt = original.text
+        if allowance > 0 and len(excerpt) > allowance:
+            excerpt = excerpt[:200] + "\n…\n" + excerpt[-max(0, allowance - 203) :]
+        elif allowance <= 0:
+            excerpt = ""
+        remaining -= len(excerpt)
+        msgs.append(ContextMessage(original.role, excerpt, original.images))
+    msgs.reverse()
     pixel_budget: set[str] = set()
     forced = {img.image_id for img in (extra_images or [])}
     for m in reversed(msgs):
@@ -189,9 +205,9 @@ class ChatEngine:
     ) -> Iterator[ChatDelta]:
         messages = build_messages(
             history,
-            system_prompt=system_prompt_now(system_extra, content_policy),
+            system_prompt=system_prompt_now(system_extra[:6000] if system_extra else None, content_policy),
             max_messages=self.max_messages,
-            max_images=self.max_images,
+            max_images=self.max_images if extra_images else min(self.max_images, 1),
             extra_images=extra_images,
         )
         with self.manager.use(CHAT) as model:

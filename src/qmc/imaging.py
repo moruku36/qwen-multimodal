@@ -85,6 +85,134 @@ def render_pdf_pages(
         raise InvalidImageError(f"PDFを読み込めません: {p.name} ({exc})") from exc
 
 
+def video_sample_times(duration: float, max_frames: int = 8) -> list[float]:
+    """Even samples including the first and last decodable moments."""
+    if duration <= 0:
+        raise InvalidImageError("動画の長さを取得できません")
+    count = min(max_frames, max(1, int(duration) + 1))
+    if count == 1:
+        return [0.0]
+    return [i * max(0, duration - 0.1) / (count - 1) for i in range(count)]
+
+
+def webm_has_video(path: str | Path) -> bool:
+    import json
+    import shutil
+    import subprocess
+
+    if not shutil.which("ffprobe"):
+        return False  # microphone uploads still work without the video dependency
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "json",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+        return bool(json.loads(probe.stdout).get("streams"))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+
+
+def sample_video_frames(
+    path: str | Path,
+    max_frames: int = 8,
+    max_side: int = 768,
+    max_mb: int = 80,
+    max_duration_s: float = 30,
+) -> tuple[list[Image.Image], float]:
+    """Probe before decoding; return RGB frames sampled across a short video."""
+    import json
+    import shutil
+    import subprocess
+
+    p = Path(path)
+    if p.stat().st_size > max_mb * 1024**2:
+        raise InvalidImageError(f"動画が大きすぎます（上限 {max_mb}MB）")
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        raise InvalidImageError(
+            "ffmpeg がありません。Colab の ffmpeg を確認するか ffmpeg をインストールしてください"
+        )
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(p)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=True,
+        )
+        duration = float(json.loads(probe.stdout)["format"]["duration"])
+        if duration > max_duration_s:
+            raise InvalidImageError(f"動画は{max_duration_s:g}秒以内にしてください")
+        frames = []
+        for second in video_sample_times(duration, max_frames):
+            for offset in (0, 0.5, 1.0):
+                result = subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-v",
+                        "error",
+                        "-ss",
+                        str(max(0, second - offset)),
+                        "-i",
+                        str(p),
+                        "-frames:v",
+                        "1",
+                        "-f",
+                        "image2pipe",
+                        "-vcodec",
+                        "png",
+                        "pipe:1",
+                    ],
+                    capture_output=True,
+                    timeout=30,
+                    check=True,
+                )
+                if result.stdout:
+                    with Image.open(io.BytesIO(result.stdout)) as image:
+                        frames.append(fit_max_side(image.convert("RGB"), max_side))
+                    break
+            else:
+                raise InvalidImageError("動画からフレームを取り出せません")
+        return frames, duration
+    except InvalidImageError:
+        raise
+    except (KeyError, ValueError, OSError, subprocess.SubprocessError) as exc:
+        raise InvalidImageError(f"動画を読み込めません: {p.name} ({exc})") from exc
+
+
+def mask_from_editor(editor: dict | None, size: tuple[int, int]) -> Image.Image | None:
+    """Use painted layer alpha as a single-channel mask at the source image size."""
+    from PIL import ImageChops, ImageFilter
+
+    if not isinstance(editor, dict):
+        return None
+    mask = Image.new("L", size, 0)
+    for layer in editor.get("layers") or []:
+        if layer is None:
+            continue
+        if not isinstance(layer, Image.Image):
+            with Image.open(layer) as opened:
+                layer = opened.copy()
+        alpha = layer.getchannel("A") if "A" in layer.getbands() else layer.convert("L")
+        mask = ImageChops.lighter(mask, alpha.resize(size, Image.Resampling.NEAREST))
+    if not mask.getbbox():
+        return None
+    return mask.point(lambda pixel: 255 if pixel > 12 else 0).filter(ImageFilter.MaxFilter(9))
+
+
 def slice_tall_image(
     path: str | Path, max_side: int = 2048, overlap: int = 128, max_bands: int = 6
 ) -> list[Image.Image]:

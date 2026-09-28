@@ -33,6 +33,8 @@ SECRET_NAMES = (
     "QMC_AUTH_PASSWORD",
     "QMC_CHAT_API_KEY",
     "QMC_CHAT_BASE_URL",
+    "QMC_IMAGE_API_KEY",
+    "QMC_IMAGE_BASE_URL",
 )
 
 
@@ -229,7 +231,7 @@ def prefetch_models(chat: bool = True, image: bool = True) -> None:
             mmproj_repo = cfg.chat.mmproj_repo or cfg.chat.hf_repo
             print("↓", mmproj_repo, cfg.chat.mmproj_file)
             download_hf_file(mmproj_repo, cfg.chat.mmproj_file, cfg.hf_cache_dir)
-    if image:
+    if image and not cfg.image.remote_base_url:
         print("↓", cfg.image.model_id)
         snapshot_download(cfg.image.model_id)
     print("✅ ダウンロード完了")

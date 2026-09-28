@@ -312,6 +312,19 @@ class SessionManager:
             for r in self.store.query("SELECT * FROM images WHERE parent_id = ?", (image_id,))
         ]
 
+    def variation_siblings(self, image: ImageRecord) -> list[ImageRecord]:
+        group = image.meta.get("variation_of")
+        if not group:
+            return []
+        return sorted(
+            [
+                item
+                for item in self.session_images(image.session_id)
+                if item.meta.get("variation_of") == group
+            ],
+            key=lambda item: item.meta.get("variation", 0),
+        )
+
     # ------------------------------------------------------------------ generations
     def add_generation(
         self,

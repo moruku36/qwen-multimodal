@@ -12,7 +12,7 @@ import logging
 import threading
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from ..config import AppConfig
 from ..gpu_manager import GPUProfile, free_cuda_memory
@@ -177,8 +177,23 @@ class QwenImageModel:
                 p._interrupt = True
             return cb_kwargs
 
+        prompt = request.prompt
+        condition_images = list(request.images)
+        if request.mask_image is not None and condition_images:
+            # The pinned QwenImage21Pipeline has no mask_image argument. Provide a visual hint
+            # and instruction instead; this does not guarantee pixel-perfect preservation.
+            source = condition_images[-1].convert("RGB")
+            mask = request.mask_image.convert("L").resize(source.size)
+            red = Image.new("RGB", source.size, (240, 40, 85))
+            overlay = Image.blend(source, Image.composite(red, source, mask), 0.55)
+            condition_images = condition_images[:-1][:7] + [
+                overlay,
+                ImageOps.colorize(mask, "black", "white"),
+                source,
+            ]
+            prompt = "Edit ONLY the masked region. Keep unmasked pixels unchanged. " + prompt
         kwargs: dict[str, Any] = {
-            "prompt": request.prompt,
+            "prompt": prompt,
             "num_inference_steps": request.steps,
             "output_resolution": request.output_resolution,
             "generator": torch.Generator("cuda").manual_seed(request.seed),
@@ -187,8 +202,8 @@ class QwenImageModel:
         }
         if request.width and request.height:
             kwargs.update(width=request.width, height=request.height)
-        if request.images:
-            kwargs["image"] = list(request.images)
+        if condition_images:
+            kwargs["image"] = condition_images
         if request.negative_prompt and request.true_cfg_scale > 1.0:
             kwargs.update(negative_prompt=request.negative_prompt, true_cfg_scale=request.true_cfg_scale)
 

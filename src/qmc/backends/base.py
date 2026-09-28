@@ -56,6 +56,7 @@ class ChatBackend(Protocol):
 class ImageRequest:
     prompt: str
     images: list[Image.Image] = field(default_factory=list)  # condition images (edit) - empty for T2I
+    mask_image: Image.Image | None = None  # white pixels are the requested edit region
     width: int | None = None
     height: int | None = None
     output_resolution: int = 1024

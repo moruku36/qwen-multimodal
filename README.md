@@ -3,9 +3,9 @@
 Google Colab の GPU をバックエンドにして、ブラウザから ChatGPT / Qwen Web 版のように使える**自分専用のマルチモーダル Qwen Web Chat**です。
 1つのチャット画面で、テキストチャット・画像の理解・画像生成・画像編集・会話の継続・履歴の保存と復元ができます。
 
-> **English summary** — A personal multimodal chat UI (Gradio) for Google Colab. Qwen3.8-27B (llama.cpp GGUF + mmproj) handles text, vision, PDF pages and tall screenshots; Qwen-Image-2.1 (diffusers) handles generation, four sequential variations and editing with multiple references. The UI includes an image lineage strip and lazy CPU speech recognition. History is mirrored from SQLite to Google Drive; `--mock` mode runs without a GPU. **The original chat, vision and image flows were verified on Colab A100 80GB. The new multimodal features have CPU tests but have not yet been verified on Colab GPU** (see [Limitations](#15-limitations)).
+> **English summary** — A personal multimodal chat UI (Gradio) for Google Colab. Qwen3.8-27B (llama.cpp GGUF + mmproj) handles text, vision, PDFs, tall screenshots and short videos. Qwen-Image-2.1 handles generation, variation selection and editing with multiple references or a coarse mask; an optional remote Image HTTP backend can replace local Diffusers. The UI includes an image strip, CPU speech recognition and optional network text-to-speech. Conversation context is bounded without deleting saved history. **The original chat, vision and image flows were verified on Colab A100 80GB. The new features have CPU tests but have not yet been verified on Colab GPU** (see [Limitations](#15-limitations)).
 
-![UI on Colab A100](docs/images/ui-a100-edit.jpg)
+![旧UIでの Colab A100 実機確認](docs/images/ui-a100-edit.jpg)
 
 ---
 
@@ -14,15 +14,21 @@ Google Colab の GPU をバックエンドにして、ブラウザから ChatGPT
 - **Chat**: Qwen3.8-27B と日本語で会話（Thinking の ON/OFF 切替可、思考過程は折りたたみ表示）
 - **Vision**: 画像をアップロードして質問。生成画像・編集画像についても質問できる
 - **PDF / 縦長Vision**: PDFをページごとに読み込み、縦長スクリーンショットを重なりのある帯に分割して読む
+- **短尺動画**: 30秒・80MB以内の動画から最大8フレームを選び、時系列を説明する
 - **Web検索**: 既定では毎ターンWeb検索し、出典付きで回答（学習データの期限を補う）
 - **Image Generation**: 「〜を描いて」「〜を生成して」で Qwen-Image-2.1 が画像生成
 - **バリエーション**: 1回の生成指示から異なるseedで最大4枚を順番に作成
+- **バリエーション選択 / マスク**: var1〜var4から編集対象を選択。塗った領域を参照する編集もできる
 - **Image Editing**: 画像を添付して「背景を東京の夜景に変更して」、生成直後に「もう少し明るく」などの追加指示
 - **複数参照 / 系譜**: 顔・服装・構図の参照画像を複数添付。サイドバーの画像系譜から版を選び、1個前・2個前への移動や元画像への復元ができる
 - **音声入力**: マイクまたは音声ファイルを文字起こしし、チャット本文とともに保存
+- **読み上げ**: 回答文をネットワーク音声で再生（既定オフ）
+- **Remote Image**: `QMC_IMAGE_BASE_URL` を設定すると画像生成・編集を外部 HTTP ワーカーへ送る
 - **比較**: 「元画像と今の画像の違いを説明して」→ 元画像と最新画像を両方 Vision に渡して説明
 - **履歴**: SQLite + Google Drive。Colab を再起動しても過去チャットと画像が復元される
 - **自動ルーティング**: モデルを意識せずに使える Auto モード＋手動切替（Chat / Vision / Generate / Edit）
+
+画面は会話欄と添付操作を中心にし、モード・検索設定・画像設定・マスク・システム状態は必要なときだけ開けます。配色はチャコールとフューシャです。会話が長くなっても保存済み履歴は消さず、モデルへ送る直近の文脈だけを制限します。
 
 ## 2. Architecture
 
@@ -59,7 +65,7 @@ flowchart TD
 | Backends | `backends/llama_server.py`, `backends/qwen_image.py`, `backends/mock.py` | モデル実体。差し替え可能 |
 | History | `history_manager.py`, `session_manager.py` | SQLite（ローカル）＋ Drive ミラー、画像のリビジョン系譜 |
 
-設計判断は ADR にまとめています: [ADR-0001 2モデル構成](docs/adr/0001-two-model-architecture.md) / [ADR-0002 SQLite + Drive](docs/adr/0002-sqlite-local-copy-with-drive-mirror.md) / [ADR-0003 仕様からの変更点](docs/adr/0003-implementation-choices.md) / [ADR-0007 画像系譜・PDF・音声](docs/adr/0007-lineage-pdf-asr.md)
+設計判断は ADR にまとめています: [ADR-0001 2モデル構成](docs/adr/0001-two-model-architecture.md) / [ADR-0002 SQLite + Drive](docs/adr/0002-sqlite-local-copy-with-drive-mirror.md) / [ADR-0003 仕様からの変更点](docs/adr/0003-implementation-choices.md) / [ADR-0007 画像系譜・PDF・音声](docs/adr/0007-lineage-pdf-asr.md) / [ADR-0008 次段階の入力と UI](docs/adr/0008-mask-video-tts-image-http.md)。外部画像ワーカーの形式は [Image HTTP API](docs/image-http-api.md) を参照してください。
 
 ## 3. Supported Models
 
@@ -139,6 +145,7 @@ python -m qmc --share         # 公開URL（Security 参照）
 | `QMC_GPU_PROFILE` | `a100_80` / `a100_40` / `l4` |
 | `QMC_AUTH_USER` / `QMC_AUTH_PASSWORD` | Gradio のログイン（`share=True` 時は必須推奨） |
 | `QMC_CHAT_BASE_URL` / `QMC_CHAT_API_KEY` | 外部の OpenAI 互換サーバー（vLLM on RunPod 等）を Chat に使う |
+| `QMC_IMAGE_BASE_URL` / `QMC_IMAGE_API_KEY` | 外部の画像ワーカーを使う。指定時はローカル Diffusers をロードしない |
 | `QMC_PROMPT_REWRITE` | `auto` / `on` / `off` |
 | `TAVILY_API_KEY` / `BRAVE_API_KEY` | Web検索プロバイダのAPIキー（任意。無ければ DuckDuckGo） |
 | `QMC_WEB_SEARCH` | `on`（既定。`auto` / `off` に変更可） |
@@ -150,8 +157,11 @@ python -m qmc --share         # 公開URL（Security 参照）
 | `QMC_SEARCH_FETCH_PAGES` | 本文を取得する上位ページ数。既定 `5` |
 | `QMC_SEARCH_PAGE_CHARS` | 1ページの本文文字数上限。既定 `4000` |
 | `QMC_PDF_MAX_PAGES` | PDFの読み込みページ数。既定 `6` |
+| `QMC_VIDEO_MAX_SECONDS` / `QMC_VIDEO_MAX_MB` | 動画入力の上限。既定 `30` 秒 / `80` MB |
 | `QMC_ASR_DEVICE` | 音声認識の実行先。既定 `cpu`、`cuda` も指定可 |
 | `QMC_ASR_MODEL` | faster-whisper のモデル。既定 `small` |
+| `QMC_TTS` | `on` / `off`。読み上げの既定値（既定 `off`） |
+| `QMC_TTS_VOICE` | edge-tts の声。既定 `ja-JP-NanamiNeural` |
 | `QMC_CHAT_HF_REPO` | `huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF` |
 | `QMC_CHAT_MODEL_FILE` | `Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf` |
 | `QMC_CHAT_MMPROJ_REPO` | `ggml-org/Qwen3.8-27B-GGUF` |
@@ -190,6 +200,7 @@ MyDrive/qwen-multimodal-colab/
 - アップロード画像は検証（形式・破損・30MB上限）、EXIF 回転補正、長辺 2048px に縮小
 - PDFは先頭から最大6ページを画像に変換してVisionに渡します（既定30MB上限）。PDFだけを添付するとページ順の要約を依頼します。`QMC_PDF_MAX_PAGES` で上限を変更できます
 - 縦長スクリーンショットは約128px重なる帯に分割してVisionに渡します。履歴と系譜に保存するのは元の1枚だけです
+- mp4 / webm / mov / mkv は **30秒・80MB以内**を受け付け、ffmpeg で先頭・末尾を含む最大8フレームを均等に取り出してVisionへ渡します。履歴には先頭の1枚だけを残します。動画生成はありません
 
 ## 10. Image Generation
 
@@ -199,6 +210,8 @@ MyDrive/qwen-multimodal-colab/
 - 🎨 設定: アスペクト比、解像度帯、Steps、Seed（-1 = ランダム）
 - 進捗（step 数）を表示、Stop で中断
 - 🎨 設定のバリエーションは既定1枚、4枚も選べます。4枚は1枚ずつ生成し、seedを7919ずつずらして同じアシスタント回答に保存します。Stopすると残りは生成しません。L4で4枚を選ぶと時間がかかります
+- 4枚生成後はサイドバーに `var1`〜`var4` が並び、既定では **var1** が選ばれます。サムネイルを選んで「これを編集」、または「3枚目を少し暗く」で指定した画像から編集します
+- `QMC_IMAGE_BASE_URL` を指定すると外部画像ワーカーを使用します。形式は [Image HTTP API](docs/image-http-api.md)。同梱の `scripts/image_http_stub.py` は通信確認専用です
 
 ## 11. Image Editing
 
@@ -209,10 +222,13 @@ MyDrive/qwen-multimodal-colab/
 - 出力のアスペクト比は元画像に合わせる。参照画像は最大10枚
 - 顔・服装・構図の写真を複数添付するとすべてを参照画像として編集に渡します。系譜で画像を選んでいる場合は添付画像の**後ろ**に選択画像を置き、最後の画像が編集結果のアスペクト比を決めます
 - サイドバーの系譜ストリップで版を選択できます。「1個前」「2個前を編集」は対象画像を切り替えるだけで、次の編集指示を待ちます。「元に戻す」または「元に戻して」は元画像の画素を新しいrevとしてコピーし、画像モデルを動かしません。「元に戻して明るくして」は元画像を参照した編集です
+- 「マスクで編集」を開いて画像に塗り、`マスクを使う` をオンにして指示を送れます。固定版 Qwen-Image-2.1 にはマスク専用の引数がないため、ローカルでは領域を赤く示した画像と白黒マスクを追加参照として渡します。指定領域以外が完全に保たれる保証はありません。HTTP ワーカーには `mask` を送ります
 
 ### 音声入力
 
 テキスト欄の下のマイクで録音するか、音声ファイル（wav / mp3 / m4a / webm / ogg）を添付できます。音声だけなら文字起こしをチャット本文にし、テキストもある場合は続けて送信します。既定はCPU上の `faster-whisper` `small`（日本語）で、最初の音声入力時にだけロードします。`--mock` では固定の文字起こし文を使います。
+
+「読み上げ」をオンにすると回答の本文を `edge-tts` で再生します。初期状態はオフで、ネットワーク接続が必要です。失敗しても回答は保存されます。`--mock` では短い WAV を返します。
 
 ### 11.5 Web検索（リアルタイム情報）
 
@@ -280,6 +296,10 @@ MyDrive/qwen-multimodal-colab/
 | PDFを読み込めない | Cell 2を再実行し、`pypdfium2==4.30.0` のインストールとPDFが30MB以内であることを確認 |
 | 「音声認識のパッケージがありません」 | Cell 2を再実行して `faster-whisper` を入れる。初回は `small` モデルの取得に時間がかかります |
 | 4枚の生成でメモリ不足 | バリエーションを1に戻し、解像度帯も下げて再実行 |
+| 会話を重ねると Chat API がコンテキスト超過になる | 送信履歴は直近から文字数を制限し、超過応答時は今回の質問だけで1回再試行します。SQLiteの履歴やチャットグループは消えません |
+| 動画を読めない / `ffmpeg` がない | 30秒・80MB以内か確認。Colab の `ffmpeg` / `ffprobe` を確認し、不足なら ffmpeg をインストール |
+| 読み上げに失敗する | Cell 2 を再実行し `edge-tts` を確認。外部音声サービスへの通信も確認 |
+| リモート画像APIが404を返す | `QMC_IMAGE_BASE_URL` の末尾に `/v1` を付けず、[契約](docs/image-http-api.md)の `/v1/images/generations` と `/v1/images/edits` をワーカー側で提供 |
 | 画像生成で `CUDA OOM` | 解像度帯・Steps を下げる。L4 は 1024 帯推奨。自動回復後も失敗する場合は「⏏ モデル解放」 |
 | L4 で返答が遅い | Chat ↔ Image のモデル切替中（ステータス表示を確認）。連続して画像を作ると切替が減る |
 | 編集結果が元画像とほぼ同じ | seed を変える / 指示を具体的にする / 解像度帯を 768 にする |
@@ -296,6 +316,7 @@ MyDrive/qwen-multimodal-colab/
 - UI の設定表示・ログにはパスワード / APIキーを出しません（`AppConfig.public_dict()`）
 - 既定ではほぼ毎ターン、**最大3件の検索クエリが外部の検索サービス**（Tavily / Brave / DuckDuckGo 等）に送信され、参考ページにもアクセスします。送りたくない会話では 🌐 Web検索 を `オフ` にしてください
 - `開放` モードでは元の話題を保った検索クエリがプロバイダに送信されます。Tavily は性的に露骨な利用を AUP で禁じています。`share=True` で開放モードを公開する場合のアクセス管理と利用内容は利用者が管理してください。未成年者の性的内容を拒否する制限は常に有効です
+- 読み上げをオンにすると回答本文が外部の音声サービスへ送信されます。`QMC_IMAGE_BASE_URL` を設定すると画像と指示文が指定したワーカーへ送信されます
 
 ## 15. Limitations
 
@@ -307,19 +328,23 @@ MyDrive/qwen-multimodal-colab/
 - シングルユーザー前提（GPU処理は1件ずつ直列）
 - Qwen-Image-2.1 は Qwen Research License（非商用研究用途）
 - PDFは既定で先頭6ページまで、縦長画像は最大6帯までVisionに渡す。音声認識は既定でCPU上の `small` モデルを使用
+- 動画は30秒・80MB以内、Visionへ最大8フレーム。動画生成は非対応
+- マスクはローカル Qwen-Image-2.1 では追加参照を使う粗い指定で、領域外の画素保持は保証されません。読み上げはネットワーク接続が必要です
 
 ## 16. Roadmap
 
 - [x] Colab A100 80GB での実機検証と VRAM 実測（`docs/vram-measurements.md`）
 - [ ] Colab L4 / A100 40GB での実機検証と VRAM 実測
 - [x] 「元に戻して」「2個前の画像」などの系譜コマンド
-- [ ] バックエンドの外部化: RunPod / Vast.ai / GCP / AWS 上の vLLM（`QMC_CHAT_BASE_URL` で Chat は対応済み）、画像側の HTTP バックエンド
+- [x] 画像側の HTTP バックエンド契約と UI クライアント（実運用ワーカーは別途）
+- [ ] RunPod / Vast.ai / GCP / AWS 上の実運用ワーカー
 - [ ] FastAPI バックエンド + 別フロントエンド / PWA（Controller は UI 非依存）
 - [ ] Docker 化
 - [ ] MTP（`mtp-Qwen3.8-27B-*.gguf`）による投機的デコード高速化
 - [x] Web検索（Tavily / Brave / DuckDuckGo）
 - [x] 音声入力（STT）
-- [ ] RAG（手元ドキュメント）/ 音声出力（TTS）/ 動画生成
+- [x] バリエーション選択・マスク指定編集・短尺動画理解・読み上げ（TTS）
+- [ ] RAG（手元ドキュメント）/ 動画生成
 - [ ] マルチユーザー（認証・DBの分離）
 
 ## Development

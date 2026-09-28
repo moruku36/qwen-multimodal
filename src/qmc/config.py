@@ -64,6 +64,8 @@ class ImageModelConfig:
     default_steps: int | None = None  # None -> GPU profile
     default_band: int = 1024  # output_resolution (long side ~ this)
     max_band: int | None = None  # None -> GPU profile
+    remote_base_url: str | None = None
+    remote_api_key: str | None = None
 
 
 @dataclass
@@ -92,8 +94,12 @@ class AppConfig:
     max_context_images: int = 3
     max_upload_mb: int = 30
     pdf_max_pages: int = 6
+    video_max_seconds: int = 30
+    video_max_mb: int = 80
     asr_device: str = "cpu"
     asr_model: str = "small"
+    tts: bool = False
+    tts_voice: str = "ja-JP-NanamiNeural"
     max_image_side: int = 2048
     server_host: str = "0.0.0.0"
     server_port: int = 7860
@@ -119,10 +125,8 @@ class AppConfig:
             if f.name in {"auth_password"}:
                 continue
             value = getattr(self, f.name)
-            if f.name == "chat":
+            if f.name in {"chat", "image"}:
                 value = {k: v for k, v in vars(value).items() if k != "remote_api_key"}
-            elif f.name == "image":
-                value = dict(vars(value))
             elif isinstance(value, Path):
                 value = str(value)
             out[f.name] = value
@@ -160,8 +164,12 @@ def load_config(**overrides) -> AppConfig:
     cfg.search_page_chars = _env_int("QMC_SEARCH_PAGE_CHARS", cfg.search_page_chars)
     cfg.search_region = _env("QMC_SEARCH_REGION", cfg.search_region) or "jp-jp"
     cfg.pdf_max_pages = _env_int("QMC_PDF_MAX_PAGES", cfg.pdf_max_pages)
+    cfg.video_max_seconds = _env_int("QMC_VIDEO_MAX_SECONDS", cfg.video_max_seconds)
+    cfg.video_max_mb = _env_int("QMC_VIDEO_MAX_MB", cfg.video_max_mb)
     cfg.asr_device = _env("QMC_ASR_DEVICE", cfg.asr_device) or "cpu"
     cfg.asr_model = _env("QMC_ASR_MODEL", cfg.asr_model) or "small"
+    cfg.tts = _env_bool("QMC_TTS", cfg.tts)
+    cfg.tts_voice = _env("QMC_TTS_VOICE", cfg.tts_voice) or cfg.tts_voice
     cfg.share = _env_bool("QMC_SHARE", cfg.share)
     cfg.server_port = _env_int("QMC_PORT", cfg.server_port)
     cfg.auth_user = _env("QMC_AUTH_USER")
@@ -183,6 +191,8 @@ def load_config(**overrides) -> AppConfig:
     if _env("QMC_CHAT_CTX"):
         cfg.chat.ctx_size = _env_int("QMC_CHAT_CTX", 0) or None
     cfg.image.precision = _env("QMC_IMAGE_PRECISION", cfg.image.precision) or "auto"
+    cfg.image.remote_base_url = _env("QMC_IMAGE_BASE_URL")
+    cfg.image.remote_api_key = _env("QMC_IMAGE_API_KEY")
 
     for key, value in overrides.items():
         if not hasattr(cfg, key):
