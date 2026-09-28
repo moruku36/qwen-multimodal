@@ -23,6 +23,7 @@ ASPECT_RATIOS: dict[str, tuple[int, int]] = {
     "9:16": (1536, 2752),
 }
 BANDS = (512, 768, 1024, 1280, 1536, 2048)
+MAX_CONDITION_IMAGES = 10  # Qwen-Image-2.1 model card
 
 
 def size_for(aspect: str, band: int) -> tuple[int, int]:
@@ -87,6 +88,21 @@ class ImageEngine:
             request.width, request.height = size_for(options.aspect, band)
         # For edits width/height stay None: the pipeline keeps the source aspect ratio.
         return request
+
+    def build_edit_request(
+        self,
+        instruction: str,
+        sources: list[Image.Image],
+        options: ImageOptions,
+        parent_seeds: set[int] | None = None,
+    ) -> ImageRequest:
+        """Image-to-image edit. ``sources`` order matters (the last one is the image being edited
+        and decides the output aspect ratio); at most 10 condition images are supported."""
+        if not sources:
+            raise ValueError("編集する画像がありません。画像を添付するか、先に画像を生成してください。")
+        if len(sources) > MAX_CONDITION_IMAGES:
+            sources = sources[-MAX_CONDITION_IMAGES:]
+        return self.build_request(instruction, options, sources=sources, avoid_seeds=parent_seeds)
 
     def run(
         self, request: ImageRequest, progress: ProgressFn | None = None, cancel: threading.Event | None = None
