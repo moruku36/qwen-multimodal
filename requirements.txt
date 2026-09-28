@@ -3,3 +3,5 @@ gradio>=6.0,<7
 pillow>=10
 requests>=2.31
 numpy>=1.26
+# Real-time web search without an API key (DuckDuckGo & co). Tavily/Brave keys are optional.
+ddgs>=9
