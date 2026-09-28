@@ -24,7 +24,15 @@ LLAMA_CPP_COMMIT = "4da6337767f973e2b4d0797e5b323d77d8565e4a"
 FALLBACK_CUDA_ARCHS = "80;89"
 DRIVE_ROOT = Path("/content/drive/MyDrive")
 APP_DRIVE_DIR = DRIVE_ROOT / "qwen-multimodal-colab"
-SECRET_NAMES = ("HF_TOKEN", "QMC_AUTH_USER", "QMC_AUTH_PASSWORD", "QMC_CHAT_API_KEY", "QMC_CHAT_BASE_URL")
+SECRET_NAMES = (
+    "HF_TOKEN",
+    "TAVILY_API_KEY",
+    "BRAVE_API_KEY",
+    "QMC_AUTH_USER",
+    "QMC_AUTH_PASSWORD",
+    "QMC_CHAT_API_KEY",
+    "QMC_CHAT_BASE_URL",
+)
 
 
 def in_colab() -> bool:
@@ -223,7 +231,13 @@ def prefetch_models(chat: bool = True, image: bool = True) -> None:
     print("✅ ダウンロード完了")
 
 
-def launch(share: bool = False, mock: bool = False, port: int = 7860, profile: str | None = None):
+def launch(
+    share: bool = False,
+    mock: bool = False,
+    port: int = 7860,
+    profile: str | None = None,
+    web_search: str | None = None,
+):
     """Cell 4: build the app and start Gradio. Returns the App."""
     from .app import build_app  # noqa: PLC0415
     from .config import load_config  # noqa: PLC0415
@@ -234,6 +248,8 @@ def launch(share: bool = False, mock: bool = False, port: int = 7860, profile: s
     cfg = load_config(mock=mock, share=share, server_port=port)
     if profile:
         cfg.gpu_profile_override = profile
+    if web_search:
+        cfg.web_search = web_search
     if share:
         print("⚠️ share=True: 発行される *.gradio.live のURLは誰でもアクセスできます。")
         if not (cfg.auth_user and cfg.auth_password):

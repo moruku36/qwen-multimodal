@@ -20,6 +20,18 @@ SYSTEM_PROMPT = (
     "その結果は会話履歴に『[画像 #ID ...]』として記録されます。"
     "履歴中の画像について聞かれたら、その記録と添付画像をもとに答えてください。"
 )
+KNOWLEDGE_NOTE = (
+    "\n\n現在日時: {now}。あなたの学習データには期限があり、それ以降の出来事は知りません。"
+    "最新情報が必要な質問で Web検索結果が与えられていない場合は、知識が古い可能性があることを一言添えてください。"
+)
+
+
+def system_prompt_now(extra: str | None = None) -> str:
+    """Base system prompt + today's date (so 'today' / 'latest' are anchored) + optional context."""
+    from .search_engine import today_str  # noqa: PLC0415
+
+    prompt = SYSTEM_PROMPT + KNOWLEDGE_NOTE.format(now=today_str())
+    return prompt + ("\n\n" + extra if extra else "")
 
 
 @dataclass
@@ -136,6 +148,13 @@ REWRITE_PROMPT = (
 )
 
 
+SEARCH_QUERY_PROMPT = (
+    "Convert the user's request into ONE concise web search query (keywords, same language as the user). "
+    "Resolve references using the context and use absolute dates when the user says today / latest. "
+    "Today is {today}. Output ONLY the query.\n\nRecent context:\n{context}\n\nUser request: {request}"
+)
+
+
 class ChatEngine:
     def __init__(self, manager: ModelManager, max_messages: int = 24, max_images: int = 3):
         self.manager = manager
@@ -148,12 +167,39 @@ class ChatEngine:
         params: ChatParams,
         cancel: threading.Event | None = None,
         extra_images: list[ContextImage] | None = None,
+        system_extra: str | None = None,
     ) -> Iterator[ChatDelta]:
         messages = build_messages(
-            history, max_messages=self.max_messages, max_images=self.max_images, extra_images=extra_images
+            history,
+            system_prompt=system_prompt_now(system_extra),
+            max_messages=self.max_messages,
+            max_images=self.max_images,
+            extra_images=extra_images,
         )
         with self.manager.use(CHAT) as model:
             yield from model.stream_chat(messages, params, cancel)
+
+    def rewrite_search_query(self, request: str, context: list[ContextMessage]) -> str | None:
+        """Turn the user's question into a short web search query (resolves 'it', 'that', dates)."""
+        from .search_engine import today_str  # noqa: PLC0415
+
+        ctx_lines = [f"{m.role}: {m.text[:200]}" for m in context[-4:] if m.text]
+        prompt = SEARCH_QUERY_PROMPT.format(
+            today=today_str(), context="\n".join(ctx_lines) or "(none)", request=request
+        )
+        try:
+            with self.manager.use(CHAT) as model:
+                text = "".join(
+                    d.content
+                    for d in model.stream_chat(
+                        [{"role": "user", "content": prompt}], ChatParams(thinking=False, max_tokens=60)
+                    )
+                )
+        except Exception as exc:
+            log.warning("Search query rewrite failed: %s", exc)
+            return None
+        text = text.strip().splitlines()[0].strip().strip('"「」') if text.strip() else ""
+        return text[:200] or None
 
     def rewrite_image_prompt(self, request: str, mode: str, context: list[ContextMessage]) -> str | None:
         """Ask the LLM for an English image prompt. Returns None when not possible."""

@@ -98,18 +98,20 @@ def status_markdown(app: App) -> str:
         f"**Loaded**: {loaded}",
         f"**Chat**: {app.chat_label}",
         f"**Image**: {app.image_label}",
+        f"**Web検索**: {app.search_label}",
         f"**履歴**: {'Google Drive' if app.cfg.drive_mounted else '⚠️ ローカル（ランタイム終了で消えます）'}",
     ]
     lines += [f"ℹ️ {n}" for n in app.store.notes[-3:]]
     return "  \n".join(lines)
 
 
-def _options(mode, thinking, aspect, band, steps, seed, rewrite) -> TurnOptions:
+def _options(mode, thinking, aspect, band, steps, seed, rewrite, web_search="auto") -> TurnOptions:
     seed_val = None if seed is None or int(seed) < 0 else int(seed)
     return TurnOptions(
         mode=mode or Mode.AUTO.value,
         thinking=bool(thinking),
         prompt_rewrite=rewrite or "auto",
+        web_search=web_search or "auto",
         image=ImageOptions(aspect=aspect or "1:1", band=int(band) if band else None,
                            steps=int(steps) if steps else None, seed=seed_val),
     )  # fmt: skip
@@ -156,11 +158,11 @@ def build_ui(app: App) -> gr.Blocks:
             return session_id
         return app.sessions.create_session()
 
-    def on_submit(msg, session_id, mode, thinking, aspect, band, steps, seed, rewrite):
+    def on_submit(msg, session_id, mode, thinking, web_search, aspect, band, steps, seed, rewrite):
         msg = msg or {}
         text, files = msg.get("text", ""), msg.get("files", [])
         session_id = ensure_session(session_id)
-        opts = _options(mode, thinking, aspect, band, steps, seed, rewrite)
+        opts = _options(mode, thinking, aspect, band, steps, seed, rewrite, web_search)
         events = app.controller.handle(session_id, text, [_file_path(f) for f in files], opts)
         for chat, route_md in stream_turn(session_id, events):
             yield chat, gr.update(value=None), route_md, session_id, gr.update()
@@ -172,11 +174,11 @@ def build_ui(app: App) -> gr.Blocks:
             gr.update(choices=session_choices(app), value=session_id),
         )
 
-    def on_regenerate(session_id, mode, thinking, aspect, band, steps, seed, rewrite):
+    def on_regenerate(session_id, mode, thinking, web_search, aspect, band, steps, seed, rewrite):
         if not session_id:
             yield gr.update(), "再生成できるメッセージがありません"
             return
-        opts = _options(mode, thinking, aspect, band, steps, seed, rewrite)
+        opts = _options(mode, thinking, aspect, band, steps, seed, rewrite, web_search)
         yield from stream_turn(session_id, app.controller.regenerate(session_id, opts))
 
     def on_stop():
@@ -233,7 +235,7 @@ def build_ui(app: App) -> gr.Blocks:
             height="68vh",
             show_label=False,
             buttons=["copy"],
-            placeholder="何でも聞いてね。画像を添付すると理解・編集、「〜を描いて」で画像生成します。",
+            placeholder="何でも聞いてね。画像を添付すると理解・編集、「〜を描いて」で画像生成、「最新の〜」はWeb検索します。",
             allow_file_downloads=True,
         )
         route_md = gr.Markdown("", elem_id="route-info")
@@ -248,6 +250,12 @@ def build_ui(app: App) -> gr.Blocks:
         with gr.Row():
             mode = gr.Radio(MODE_CHOICES, value=Mode.AUTO.value, label="モード", scale=4)
             thinking = gr.Checkbox(value=app.cfg.thinking_default, label="Thinking（深く考える）", scale=1)
+            web_search = gr.Radio(
+                [("自動", "auto"), ("常に", "on"), ("オフ", "off")],
+                value=app.cfg.web_search,
+                label="🌐 Web検索（最新情報）",
+                scale=2,
+            )
         with gr.Row():
             stop_btn = gr.Button("⏹ Stop", size="sm")
             regen_btn = gr.Button("🔄 Regenerate", size="sm")
@@ -264,7 +272,7 @@ def build_ui(app: App) -> gr.Blocks:
                 label="画像プロンプトの最適化（Chatモデルで英語プロンプト化）",
             )
 
-        settings = [mode, thinking, aspect, band, steps, seed, rewrite]
+        settings = [mode, thinking, web_search, aspect, band, steps, seed, rewrite]
         textbox.submit(
             on_submit,
             [textbox, session_state, *settings],

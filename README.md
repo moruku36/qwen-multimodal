@@ -13,6 +13,7 @@ Google Colab の GPU をバックエンドにして、ブラウザから ChatGPT
 
 - **Chat**: Qwen3.8-27B と日本語で会話（Thinking の ON/OFF 切替可、思考過程は折りたたみ表示）
 - **Vision**: 画像をアップロードして質問。生成画像・編集画像についても質問できる
+- **Web検索**: 「最新の〜」「今日の〜」などは自動でWeb検索し、出典付きで回答（学習データの期限を補う）
 - **Image Generation**: 「〜を描いて」「〜を生成して」で Qwen-Image-2.1 が画像生成
 - **Image Editing**: 画像を添付して「背景を東京の夜景に変更して」、生成直後に「もう少し明るく」などの追加指示
 - **比較**: 「元画像と今の画像の違いを説明して」→ 元画像と最新画像を両方 Vision に渡して説明
@@ -135,6 +136,9 @@ python -m qmc --share         # 公開URL（Security 参照）
 | `QMC_AUTH_USER` / `QMC_AUTH_PASSWORD` | Gradio のログイン（`share=True` 時は必須推奨） |
 | `QMC_CHAT_BASE_URL` / `QMC_CHAT_API_KEY` | 外部の OpenAI 互換サーバー（vLLM on RunPod 等）を Chat に使う |
 | `QMC_PROMPT_REWRITE` | `auto` / `on` / `off` |
+| `TAVILY_API_KEY` / `BRAVE_API_KEY` | Web検索プロバイダのAPIキー（任意。無ければ DuckDuckGo） |
+| `QMC_WEB_SEARCH` | Web検索の既定値 `auto` / `on` / `off` |
+| `QMC_SEARCH_PROVIDER` | `auto` / `tavily` / `brave` / `duckduckgo` |
 | `QMC_MOCK=1` | CPU モック |
 
 ## 7. Google Drive 履歴保存
@@ -182,6 +186,16 @@ MyDrive/qwen-multimodal-colab/
 - 編集結果は親画像の revision + 1 として保存
 - **編集時は系譜内で使った seed を使わない**（同じ seed・解像度だと指示を無視したほぼコピーになる既知の挙動: [diffusers#14824](https://github.com/huggingface/diffusers/issues/14824)）
 - 出力のアスペクト比は元画像に合わせる。参照画像は最大10枚
+
+### 11.5 Web検索（リアルタイム情報）
+
+モデルの学習データには期限があるため、最新情報が必要な質問は Web 検索して出典付きで答えます。
+
+- 画面の **🌐 Web検索**: `自動`（既定。「最新」「今日」「ニュース」「株価」「天気」「2026年」「調べて」などを含む質問だけ検索）/ `常に` / `オフ`
+- 流れ: Chat モデルが検索クエリを作成 → 検索（上位5件）→ 上位3ページの本文を取得 → 番号付きの参考データとしてシステムプロンプトに入れて回答 → 末尾に **🔎 参考（Web検索）** のリンク一覧
+- 検索プロバイダ（自動選択）: `TAVILY_API_KEY` があれば **Tavily**、`BRAVE_API_KEY` があれば **Brave Search**、どちらも無ければ **DuckDuckGo（`ddgs`、キー不要）**
+- 検索しないときも、システムプロンプトに**現在日時（JST）**を入れ、「学習データ以降は知らない」ことをモデルに伝えています
+- 検索結果は「データ」として扱い、ページ内の指示には従わないようにプロンプトで明示しています（プロンプトインジェクション対策）
 
 ## 12. GPU / VRAM
 
@@ -238,6 +252,7 @@ MyDrive/qwen-multimodal-colab/
 - `llama-server` は `127.0.0.1` にのみバインドし、起動ごとにランダムな API キーを付与
 - `.gitignore` でモデル・生成画像・DB・`.env`・認証情報ファイルを除外
 - UI の設定表示・ログにはパスワード / APIキーを出しません（`AppConfig.public_dict()`）
+- Web検索を使うと、**検索クエリが外部の検索サービス**（Tavily / Brave / DuckDuckGo 等）に送信され、参考ページにもアクセスします。送りたくない会話では 🌐 Web検索 を `オフ` にしてください
 
 ## 15. Limitations
 
@@ -258,7 +273,8 @@ MyDrive/qwen-multimodal-colab/
 - [ ] FastAPI バックエンド + 別フロントエンド / PWA（Controller は UI 非依存）
 - [ ] Docker 化
 - [ ] MTP（`mtp-Qwen3.8-27B-*.gguf`）による投機的デコード高速化
-- [ ] RAG / Web検索 / 音声入出力（STT / TTS）
+- [x] Web検索（Tavily / Brave / DuckDuckGo）
+- [ ] RAG（手元ドキュメント）/ 音声入出力（STT / TTS）
 - [ ] マルチユーザー（認証・DBの分離）
 
 ## Development

@@ -20,6 +20,13 @@ from .image_engine import ImageEngine, ImageOptions
 from .imaging import InvalidImageError, load_user_image
 from .model_manager import CHAT, IMAGE, ModelManager
 from .router import ImageTarget, Intent, Mode, RouteContext, RouteDecision, route
+from .search_engine import (
+    WebSearchEngine,
+    build_search_context,
+    fallback_query,
+    format_sources,
+    needs_web_search,
+)
 from .session_manager import ImageRecord, MessageRecord, SessionManager
 from .vision_engine import VisionEngine
 
@@ -38,6 +45,7 @@ class TurnOptions:
     thinking: bool = False
     image: ImageOptions = field(default_factory=ImageOptions)
     prompt_rewrite: str = "auto"  # auto | on | off
+    web_search: str = "auto"  # auto | on | off
 
 
 _SENTINEL = object()
@@ -55,6 +63,7 @@ class ChatController:
         max_image_side: int = 2048,
         max_upload_mb: int = 30,
         after_turn: Callable[[], None] | None = None,
+        search: WebSearchEngine | None = None,
     ):
         self.sessions = sessions
         self.manager = manager
@@ -64,6 +73,7 @@ class ChatController:
         self.max_image_side = max_image_side
         self.max_upload_mb = max_upload_mb
         self.after_turn = after_turn
+        self.search = search
         self.cancel_event = threading.Event()
         self._status_q: queue.Queue = queue.Queue()
         manager.on_status = self._status_q.put
@@ -249,9 +259,15 @@ class ChatController:
                     history, targets, params, self.cancel_event, compare=decision.compare
                 )
         else:
+            system_extra, sources_md, search_meta = None, "", None
+            for ev in self._web_search(session_id, user_msg, options):
+                if isinstance(ev, Event):
+                    yield ev
+                else:
+                    system_extra, sources_md, search_meta = ev
 
             def gen():
-                return self.chat.stream(history, params, self.cancel_event)
+                return self.chat.stream(history, params, self.cancel_event, system_extra=system_extra)
 
         content, reasoning = [], []
 
@@ -277,6 +293,12 @@ class ChatController:
         text = "".join(content).strip()
         if cancelled:
             text += "\n\n（停止しました）"
+        meta = {"duration_s": round(time.time() - t0, 2), "cancelled": cancelled}
+        if decision.intent is not Intent.VISION and search_meta:
+            meta["web_search"] = search_meta
+            if sources_md and not cancelled:
+                text += sources_md
+                yield Event("text", sources_md)
         self.sessions.add_message(
             session_id,
             "assistant",
@@ -284,8 +306,32 @@ class ChatController:
             intent=decision.intent.value,
             model=getattr(self.manager.get(CHAT), "label", CHAT),
             reasoning="".join(reasoning) or None,
-            meta={"duration_s": round(time.time() - t0, 2), "cancelled": cancelled},
+            meta=meta,
         )
+
+    def _web_search(self, session_id: str, user_msg: MessageRecord, options: TurnOptions):
+        """Yields status Events, then one (system_extra, sources_md, meta) tuple."""
+        text = user_msg.content
+        if not needs_web_search(text, options.web_search):
+            yield (None, "", None)
+            return
+        if self.search is None or not self.search.available:
+            if options.web_search == "on":
+                yield Event("status", "⚠️ Web検索が使えません（ddgs 未インストール / APIキー未設定）")
+            yield (None, "", None)
+            return
+        yield Event("status", "🔎 検索クエリを作成中…")
+        history = self._context(session_id, user_msg.id)[:-1]
+        query = self.chat.rewrite_search_query(text, history) or fallback_query(text)
+        yield Event("status", f"🔎 Web検索中: {query}")
+        resp = self.search.search(query)
+        if resp.error or not resp.results:
+            yield Event("status", resp.error or f"🔎 「{query}」の検索結果がありませんでした")
+            yield (None, "", {"query": query, "provider": resp.provider, "error": resp.error, "urls": []})
+            return
+        yield Event("status", f"📄 {len(resp.results)}件の結果を読み込みました（{resp.provider}）")
+        meta = {"query": query, "provider": resp.provider, "urls": [r.url for r in resp.results]}
+        yield (build_search_context(resp), format_sources(resp), meta)
 
     # ------------------------------------------------------------------ generate / edit
     def _image(
