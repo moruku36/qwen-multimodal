@@ -9,6 +9,7 @@ from qmc.gpu_manager import NO_GPU
 from qmc.search_engine import (
     BraveProvider,
     DuckDuckGoProvider,
+    MergedProvider,
     SearchResponse,
     SearchResult,
     TavilyProvider,
@@ -19,7 +20,9 @@ from qmc.search_engine import (
     html_to_text,
     make_provider,
     needs_web_search,
+    preserves_adult_terms,
     resolve_safesearch,
+    usable_search_queries,
     usable_search_query,
 )
 
@@ -123,14 +126,16 @@ def test_context_is_truncated():
 def test_make_provider_prefers_keys(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "t")
     monkeypatch.setenv("BRAVE_API_KEY", "b")
-    assert isinstance(make_provider(), BraveProvider)
+    assert isinstance(make_provider(), MergedProvider)
     assert isinstance(make_provider(content_policy="standard"), TavilyProvider)
+    assert isinstance(make_provider("brave"), BraveProvider)
     monkeypatch.delenv("TAVILY_API_KEY")
-    assert isinstance(make_provider(), BraveProvider)
+    assert isinstance(make_provider(), MergedProvider)
 
 
 def test_provider_safesearch_payloads(monkeypatch):
     from qmc import search_engine
+
     seen = {}
 
     class Response:
@@ -164,6 +169,75 @@ def test_rewrite_refusal_falls_back():
     assert usable_search_query("adult game", "unrelated lecture") == "adult game"
     assert resolve_safesearch("auto", "open") == "off"
     assert resolve_safesearch("auto", "standard") == "moderate"
+
+
+def test_multi_query_parser_and_refusal():
+    assert usable_search_queries("吉原について教えて", "吉原 東京\n吉原 歴史\n吉原 アクセス\n吉原 追加") == [
+        "吉原 東京",
+        "吉原 歴史",
+        "吉原 アクセス",
+    ]
+    assert usable_search_queries("吉原について教えて", "お答えできません。健全な範囲で") == [
+        "吉原について教えて"
+    ]
+
+
+def test_search_many_merges_urls_and_preserves_richer_snippet():
+    class P:
+        name = "p"
+
+        def search(self, query, max_results, safesearch):
+            return [
+                SearchResult(query, "https://same", "long snippet" if query == "b" else "s"),
+                SearchResult(query, f"https://{query}"),
+            ]
+
+    resp = WebSearchEngine(P(), fetch_pages=0).search_many(["a", "b"])
+    assert resp.queries == ["a", "b"]
+    assert [r.url for r in resp.results] == ["https://same", "https://a", "https://b"]
+    assert resp.results[0].snippet == "long snippet"
+    assert "a / b" in build_search_context(resp)
+
+
+def test_merged_provider_and_open_auto(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("BRAVE_API_KEY", "b")
+    monkeypatch.setitem(sys.modules, "ddgs", SimpleNamespace())
+    provider = make_provider(content_policy="open")
+    assert isinstance(provider, MergedProvider)
+    assert provider.name == "brave+duckduckgo"
+    monkeypatch.setattr(provider.providers[0], "search", lambda *a: [SearchResult("A", "https://a", "short")])
+    monkeypatch.setattr(
+        provider.providers[1],
+        "search",
+        lambda *a: [SearchResult("A", "https://a", "longer snippet"), SearchResult("B", "https://b")],
+    )
+    results = provider.search("q", 8)
+    assert [r.url for r in results] == ["https://a", "https://b"]
+    assert results[0].snippet == "longer snippet"
+
+
+def test_ddg_empty_retries_worldwide(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    regions = []
+
+    class DDGS:
+        def text(self, query, **kwargs):
+            regions.append(kwargs["region"])
+            return [] if kwargs["region"] == "jp-jp" else [{"title": "hit", "href": "https://hit"}]
+
+    monkeypatch.setitem(sys.modules, "ddgs", SimpleNamespace(DDGS=DDGS))
+    assert DuckDuckGoProvider().search("q", 8)[0].url == "https://hit"
+    assert regions == ["jp-jp", "wt-wt"]
+
+
+def test_adult_rewrite_preservation():
+    assert not preserves_adult_terms("成人向けヌードを描いて", "beautiful portrait")
+    assert preserves_adult_terms("成人向けヌードを描いて", "adult nude portrait")
 
 
 def test_system_prompt_contains_today():
@@ -203,7 +277,7 @@ def test_controller_default_searches_generic_question(app):
 
 
 def test_controller_rewrite_refusal_and_policy_prompt(app, monkeypatch):
-    monkeypatch.setattr(app.controller.chat, "rewrite_search_query", lambda *a: "お答えできません")
+    monkeypatch.setattr(app.controller.chat, "rewrite_search_queries", lambda *a: ["お答えできません"])
     sid = app.sessions.create_session()
     list(app.controller.handle(sid, "今日の成人向けゲームを調べて", None, TurnOptions(content_policy="open")))
     assert app.controller.search.provider.queries[-1] == "今日の成人向けゲーム"

@@ -141,6 +141,10 @@ python -m qmc --share         # 公開URL（Security 参照）
 | `QMC_CONTENT_POLICY` | `open`（既定）/ `standard`。画面から各ターンで切替可能 |
 | `QMC_SEARCH_SAFESEARCH` | `auto`（open は off、standard は moderate）/ `off` / `moderate` / `strict` |
 | `QMC_SEARCH_PROVIDER` | `auto` / `tavily` / `brave` / `duckduckgo` |
+| `QMC_SEARCH_REGION` | DuckDuckGo の地域。既定 `jp-jp`。0件の場合は `wt-wt` で再試行 |
+| `QMC_SEARCH_MAX_RESULTS` | 統合後の検索結果上限。既定 `8` |
+| `QMC_SEARCH_FETCH_PAGES` | 本文を取得する上位ページ数。既定 `5` |
+| `QMC_SEARCH_PAGE_CHARS` | 1ページの本文文字数上限。既定 `4000` |
 | `QMC_CHAT_HF_REPO` | `huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF` |
 | `QMC_CHAT_MODEL_FILE` | `Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf` |
 | `QMC_CHAT_MMPROJ_REPO` | `ggml-org/Qwen3.8-27B-GGUF` |
@@ -200,8 +204,9 @@ MyDrive/qwen-multimodal-colab/
 
 - 画面の **🌐 Web検索**: `常に`（既定。毎ターン検索）/ `自動`（「最新」「今日」などのキーワードで判定）/ `オフ`
 - **コンテンツ方針**: `開放` は合法な成人向け・センシティブな話題を検索・回答し、safesearch を既定で off にします。`標準` は safesearch が既定で moderate です。未成年者の性的内容はどちらでも扱いません
-- 流れ: Chat モデルが検索クエリを作成 → 検索（上位5件）→ 上位3ページの本文を取得 → 番号付きの参考データとしてシステムプロンプトに入れて回答 → 末尾に **🔎 参考（Web検索）** のリンク一覧
-- 検索プロバイダ（自動選択）: `開放` は **Brave → DuckDuckGo → Tavily**、`標準` は **Tavily → Brave → DuckDuckGo**。Tavily の Acceptable Use Policy は性的に露骨なクエリを禁じています。明示的に Tavily を選んだ場合は警告が表示されます
+- 流れ: Chat モデルが最大3件の検索クエリを作成 → 各クエリを検索してURLの重複を統合（上位8件）→ 上位5ページの本文を取得 → 番号付きの参考データとしてシステムプロンプトに入れて回答 → 末尾に **🔎 参考（Web検索）** のリンク一覧。取得した本文が空なら検索結果の抜粋を使います
+- 検索プロバイダ（自動選択）: `開放` でBraveキーとDuckDuckGoが使える場合は **両方を検索**して統合します。それ以外の `開放` は Brave → DuckDuckGo → Tavily、`標準` は Tavily → Brave → DuckDuckGo の優先順です。Tavily の Acceptable Use Policy は性的に露骨なクエリを禁じています。明示的に Tavily を選んだ場合は警告が表示されます
+- `開放` のChatで回答が拒否文になった場合は一度だけ再生成します。検索が未実行なら検索してから再生成し、検索済みなら取得結果にある固有名詞とURLを優先するよう指示します。保存する回答は最終結果のみです
 - 既定の Chat は拒否方向を削ったコミュニティ GGUF です。品質・指示追従が公式より落ちることがあります。公式に戻す設定は下表を参照してください。Vision 用 mmproj は公式リポジトリから取得します。
 
 | 公式 Chat に戻す環境変数 | 値 |
@@ -213,6 +218,7 @@ MyDrive/qwen-multimodal-colab/
 代替のコミュニティ GGUF は [`mradermacher/Qwen3.8-27B-OBLITERATED-GGUF`](https://huggingface.co/mradermacher/Qwen3.8-27B-OBLITERATED-GGUF) の `Qwen3.8-27B-OBLITERATED.Q4_K_M.gguf` もあります。使う場合は `QMC_CHAT_HF_REPO` と `QMC_CHAT_MODEL_FILE` を変更し、mmproj は引き続き公式を指定してください。モデル変更後はランタイム再起動、または画面の「⏏ モデル解放」のあと Cell 4 を再実行してください。
 - 検索しないときも、システムプロンプトに**現在日時（JST）**を入れ、「学習データ以降は知らない」ことをモデルに伝えています
 - 検索結果は「データ」として扱い、ページ内の指示には従わないようにプロンプトで明示しています（プロンプトインジェクション対策）
+- 画像プロンプトの最適化は既定で `auto`（Chatがロード済みの場合だけ英語化）です。`開放` で元の成人向け語句が書き換えから消えた場合は元のプロンプトを使用します。画面の「そのまま使う」または `QMC_PROMPT_REWRITE=off` でも書き換えを無効にできます。画像モデルのテキストエンコーダはQwen-Image-2.1公式のままです
 
 ## 12. GPU / VRAM
 
@@ -269,7 +275,7 @@ MyDrive/qwen-multimodal-colab/
 - `llama-server` は `127.0.0.1` にのみバインドし、起動ごとにランダムな API キーを付与
 - `.gitignore` でモデル・生成画像・DB・`.env`・認証情報ファイルを除外
 - UI の設定表示・ログにはパスワード / APIキーを出しません（`AppConfig.public_dict()`）
-- 既定ではほぼ毎ターン、**検索クエリが外部の検索サービス**（Tavily / Brave / DuckDuckGo 等）に送信され、参考ページにもアクセスします。送りたくない会話では 🌐 Web検索 を `オフ` にしてください
+- 既定ではほぼ毎ターン、**最大3件の検索クエリが外部の検索サービス**（Tavily / Brave / DuckDuckGo 等）に送信され、参考ページにもアクセスします。送りたくない会話では 🌐 Web検索 を `オフ` にしてください
 - `開放` モードでは元の話題を保った検索クエリがプロバイダに送信されます。Tavily は性的に露骨な利用を AUP で禁じています。`share=True` で開放モードを公開する場合のアクセス管理と利用内容は利用者が管理してください。未成年者の性的内容を拒否する制限は常に有効です
 
 ## 15. Limitations

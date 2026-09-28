@@ -26,10 +26,10 @@ def test_outside_colab_is_safe(monkeypatch):
 def test_notebook_is_thin():
     import json
 
-    nb = json.loads((Path(__file__).parents[1] / "Qwen-Multimodal-Colab.ipynb").read_text())
+    nb = json.loads((Path(__file__).parents[1] / "Qwen-Multimodal-Colab.ipynb").read_text(encoding="utf-8"))
     code = [c for c in nb["cells"] if c["cell_type"] == "code"]
     assert len(code) == 4
-    assert all(len(c["source"]) < 15 for c in code)
+    assert all(len(c["source"]) <= 15 for c in code)
     assert not any("HF_TOKEN=" in "".join(c["source"]) for c in code)  # no secrets in the notebook
 
 

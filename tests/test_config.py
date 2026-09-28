@@ -43,6 +43,23 @@ def test_model_and_search_defaults(monkeypatch):
     assert cfg.chat.hf_repo == "huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF"
     assert cfg.chat.model_file == "Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf"
     assert cfg.chat.mmproj_repo == "ggml-org/Qwen3.8-27B-GGUF"
+    assert cfg.search_max_results == 8
+    assert cfg.search_fetch_pages == 5
+    assert cfg.search_page_chars == 4000
+
+
+def test_search_window_env_overrides(monkeypatch):
+    monkeypatch.setenv("QMC_SEARCH_MAX_RESULTS", "10")
+    monkeypatch.setenv("QMC_SEARCH_FETCH_PAGES", "6")
+    monkeypatch.setenv("QMC_SEARCH_PAGE_CHARS", "5000")
+    monkeypatch.setenv("QMC_SEARCH_REGION", "wt-wt")
+    cfg = load_config()
+    assert (cfg.search_max_results, cfg.search_fetch_pages, cfg.search_page_chars, cfg.search_region) == (
+        10,
+        6,
+        5000,
+        "wt-wt",
+    )
 
 
 def test_public_dict_hides_secrets(monkeypatch):

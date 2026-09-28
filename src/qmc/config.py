@@ -84,7 +84,10 @@ class AppConfig:
     content_policy: str = "open"  # open | standard
     search_safesearch: str = "auto"  # auto | off | moderate | strict
     search_provider: str = "auto"  # auto | tavily | brave | duckduckgo
-    search_max_results: int = 5
+    search_max_results: int = 8
+    search_fetch_pages: int = 5
+    search_page_chars: int = 4000
+    search_region: str = "jp-jp"
     max_context_messages: int = 24
     max_context_images: int = 3
     max_upload_mb: int = 30
@@ -150,6 +153,9 @@ def load_config(**overrides) -> AppConfig:
     cfg.search_safesearch = _env("QMC_SEARCH_SAFESEARCH", cfg.search_safesearch) or "auto"
     cfg.search_provider = _env("QMC_SEARCH_PROVIDER", cfg.search_provider) or "auto"
     cfg.search_max_results = _env_int("QMC_SEARCH_MAX_RESULTS", cfg.search_max_results)
+    cfg.search_fetch_pages = _env_int("QMC_SEARCH_FETCH_PAGES", cfg.search_fetch_pages)
+    cfg.search_page_chars = _env_int("QMC_SEARCH_PAGE_CHARS", cfg.search_page_chars)
+    cfg.search_region = _env("QMC_SEARCH_REGION", cfg.search_region) or "jp-jp"
     cfg.share = _env_bool("QMC_SHARE", cfg.share)
     cfg.server_port = _env_int("QMC_PORT", cfg.server_port)
     cfg.auth_user = _env("QMC_AUTH_USER")

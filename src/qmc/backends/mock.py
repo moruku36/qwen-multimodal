@@ -66,7 +66,7 @@ class MockChatModel(_MockManaged):
             request = text.rsplit("User request:", 1)[-1].strip()
             yield ChatDelta(content=f"[rewritten] {request}")
             return
-        if "Output ONLY the query" in text:
+        if "Output ONLY queries" in text:
             request = text.rsplit("User request:", 1)[-1].strip()
             yield ChatDelta(content=f"{request} 最新")
             return

@@ -37,7 +37,11 @@ def system_prompt_now(extra: str | None = None, content_policy: str = "open") ->
     """Base system prompt + today's date (so 'today' / 'latest' are anchored) + optional context."""
     from .search_engine import today_str  # noqa: PLC0415
 
-    prompt = SYSTEM_PROMPT + (OPEN_POLICY if content_policy == "open" else "") + KNOWLEDGE_NOTE.format(now=today_str())
+    prompt = (
+        SYSTEM_PROMPT
+        + (OPEN_POLICY if content_policy == "open" else "")
+        + KNOWLEDGE_NOTE.format(now=today_str())
+    )
     return prompt + ("\n\n" + extra if extra else "")
 
 
@@ -158,11 +162,12 @@ REWRITE_PROMPT = (
 
 
 SEARCH_QUERY_PROMPT = (
-    "Convert the user's request into ONE concise web search query (keywords, same language as the user). "
-    "Keep the user's topic verbatim, including adult and sensitive terms. Do not use euphemisms. "
-    "Resolve references using the context and use absolute dates when the user says today / latest. "
-    "If rewriting is unnecessary, output the stripped user text. "
-    "Today is {today}. Output ONLY the query.\n\nRecent context:\n{context}\n\nUser request: {request}"
+    "Write 1 to 3 web search queries, one idea per line. Output ONLY queries: no numbering or quotes.\n"
+    "Keep proper nouns (places and products) verbatim. Keep adult and sensitive terms without euphemisms.\n"
+    "For 'サイトを教えて' or 'どこで見れる', include サイト or URL in at least one query.\n"
+    "Use site: only when the user named a domain. Resolve references using context.\n"
+    "Use absolute dates when the user says 今日 or 最新. Never invent underage terms.\n"
+    "Today is {today}.\n\nRecent context:\n{context}\n\nUser request: {request}"
 )
 
 
@@ -191,8 +196,8 @@ class ChatEngine:
         with self.manager.use(CHAT) as model:
             yield from model.stream_chat(messages, params, cancel)
 
-    def rewrite_search_query(self, request: str, context: list[ContextMessage]) -> str | None:
-        """Turn the user's question into a short web search query (resolves 'it', 'that', dates)."""
+    def rewrite_search_queries(self, request: str, context: list[ContextMessage]) -> list[str]:
+        """Turn the user's question into up to three web search queries."""
         from .search_engine import today_str  # noqa: PLC0415
 
         ctx_lines = [f"{m.role}: {m.text[:200]}" for m in context[-4:] if m.text]
@@ -204,13 +209,13 @@ class ChatEngine:
                 text = "".join(
                     d.content
                     for d in model.stream_chat(
-                        [{"role": "user", "content": prompt}], ChatParams(thinking=False, max_tokens=60)
+                        [{"role": "user", "content": prompt}], ChatParams(thinking=False, max_tokens=160)
                     )
                 )
         except Exception as exc:
             log.warning("Search query rewrite failed: %s", exc)
-            return None
-        return text.strip().strip('"「」') or None
+            return []
+        return text.strip().splitlines()
 
     def rewrite_image_prompt(self, request: str, mode: str, context: list[ContextMessage]) -> str | None:
         """Ask the LLM for an English image prompt. Returns None when not possible."""

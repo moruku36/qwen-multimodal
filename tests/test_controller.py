@@ -3,6 +3,7 @@
 import pytest
 
 from qmc.app import build_app
+from qmc.backends.base import ChatDelta
 from qmc.config import load_config
 from qmc.controller import TurnOptions
 from qmc.gpu_manager import NO_GPU, GPUInfo
@@ -22,7 +23,7 @@ def app(tmp_path):
     return a
 
 
-FAST = TurnOptions(image=ImageOptions(steps=2))
+FAST = TurnOptions(image=ImageOptions(steps=2), web_search="off")
 
 
 def run(app, sid, text, files=None, options=FAST):
@@ -88,6 +89,54 @@ def test_restore_after_restart(app, tmp_path):
     assert [m.role for m in msgs] == ["user", "assistant", "user", "assistant"]
     img = app2.sessions.latest_image(sid)
     assert app2.sessions.image_path(img).exists()
+
+
+def test_open_refusal_retries_once_and_saves_final_answer(app, monkeypatch):
+    calls = []
+
+    def fake_stream(history, params, cancel, system_extra=None, content_policy="open"):
+        calls.append(system_extra)
+        yield ChatDelta(content="紹介はできません" if len(calls) == 1 else "候補は Example [1] です。")
+
+    monkeypatch.setattr(app.controller.chat, "stream", fake_stream)
+    sid = app.sessions.create_session()
+    events = run(app, sid, "日本のサイトを教えて", options=TurnOptions(web_search="off"))
+    msg = app.sessions.get_messages(sid)[-1]
+    assert len(calls) == 2
+    assert calls[0] is None and "## Web検索結果" in calls[1]
+    assert "紹介はできません" not in msg.content
+    assert "候補は Example" in msg.content and "参考（Web検索）" in msg.content
+    assert any("拒否だったため" in str(e.data) for e in events if e.kind == "status")
+
+
+def test_open_refusal_after_search_uses_source_instruction(app, monkeypatch):
+    calls = []
+
+    def fake_stream(history, params, cancel, system_extra=None, content_policy="open"):
+        calls.append(history[-1].text)
+        yield ChatDelta(content="cannot recommend" if len(calls) == 1 else "Example URL [1]")
+
+    monkeypatch.setattr(app.controller.chat, "stream", fake_stream)
+    sid = app.sessions.create_session()
+    run(app, sid, "サイトを教えて", options=TurnOptions(web_search="on"))
+    assert len(calls) == 2
+    assert "検索結果にある固有名詞とURL" in calls[1]
+    assert "検索結果にある固有名詞とURL" not in app.sessions.get_messages(sid)[0].content
+    assert app.sessions.get_messages(sid)[-1].content.startswith("Example URL [1]")
+
+
+def test_open_image_rewrite_drops_adult_term_uses_original(app, monkeypatch):
+    monkeypatch.setattr(app.controller.chat, "rewrite_image_prompt", lambda *a: "a beautiful portrait")
+    sid = app.sessions.create_session()
+    run(
+        app,
+        sid,
+        "成人向けヌードを描いて",
+        options=TurnOptions(
+            mode="generate", image=ImageOptions(steps=1), prompt_rewrite="on", content_policy="open"
+        ),
+    )
+    assert app.sessions.generations(sid)[-1]["effective_prompt"] == "成人向けヌードを描いて"
 
 
 def test_gpu_profile_auto_selection(tmp_path):
@@ -160,7 +209,5 @@ def test_prompt_rewrite_auto_uses_loaded_chat(app):
 def test_image_rewrite_refusal_uses_original(app, monkeypatch):
     monkeypatch.setattr(app.controller.chat, "rewrite_image_prompt", lambda *a: "お答えできません")
     sid = app.sessions.create_session()
-    run(app, sid, "成人の肖像を描いて", options=TurnOptions(
-        image=ImageOptions(steps=1), prompt_rewrite="on"
-    ))
+    run(app, sid, "成人の肖像を描いて", options=TurnOptions(image=ImageOptions(steps=1), prompt_rewrite="on"))
     assert app.sessions.generations(sid)[-1]["effective_prompt"] == "成人の肖像を描いて"

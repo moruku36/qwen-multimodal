@@ -19,10 +19,18 @@ def test_build_ui(app):
     assert isinstance(build_ui(app), gr.Blocks)
 
 
+def test_open_policy_label():
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / "src" / "qmc" / "ui.py").read_text(encoding="utf-8")
+    assert '[("開放", "open"), ("標準", "standard")]' in source
+    assert "検索OK" not in source
+
+
 def test_render_history_with_images_and_reasoning(app):
     sid = app.sessions.create_session()
     list(app.controller.handle(sid, "猫を描いて", None, TurnOptions(image=ImageOptions(steps=1))))
-    list(app.controller.handle(sid, "こんにちは", None, TurnOptions(thinking=True)))
+    list(app.controller.handle(sid, "こんにちは", None, TurnOptions(thinking=True, web_search="off")))
     msgs = render_history(app, sid)
     roles = [m["role"] for m in msgs]
     assert roles[0] == "user" and "assistant" in roles

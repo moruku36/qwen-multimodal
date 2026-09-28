@@ -110,8 +110,9 @@ def status_markdown(app: App, content_policy: str | None = None) -> str:
     return "  \n".join(lines)
 
 
-def _options(mode, thinking, aspect, band, steps, seed, rewrite, web_search="auto",
-             content_policy="open") -> TurnOptions:
+def _options(
+    mode, thinking, aspect, band, steps, seed, rewrite, web_search="auto", content_policy="open"
+) -> TurnOptions:
     seed_val = None if seed is None or int(seed) < 0 else int(seed)
     return TurnOptions(
         mode=mode or Mode.AUTO.value,
@@ -165,8 +166,9 @@ def build_ui(app: App) -> gr.Blocks:
             return session_id
         return app.sessions.create_session()
 
-    def on_submit(msg, session_id, mode, thinking, web_search, content_policy,
-                  aspect, band, steps, seed, rewrite):
+    def on_submit(
+        msg, session_id, mode, thinking, web_search, content_policy, aspect, band, steps, seed, rewrite
+    ):
         msg = msg or {}
         text, files = msg.get("text", ""), msg.get("files", [])
         session_id = ensure_session(session_id)
@@ -182,8 +184,9 @@ def build_ui(app: App) -> gr.Blocks:
             gr.update(choices=session_choices(app), value=session_id),
         )
 
-    def on_regenerate(session_id, mode, thinking, web_search, content_policy,
-                      aspect, band, steps, seed, rewrite):
+    def on_regenerate(
+        session_id, mode, thinking, web_search, content_policy, aspect, band, steps, seed, rewrite
+    ):
         if not session_id:
             yield gr.update(), "再生成できるメッセージがありません"
             return
@@ -266,8 +269,10 @@ def build_ui(app: App) -> gr.Blocks:
                 scale=2,
             )
             content_policy = gr.Radio(
-                [("開放 (成人向け検索OK)", "open"), ("標準", "standard")],
-                value=app.cfg.content_policy, label="コンテンツ方針", scale=2,
+                [("開放", "open"), ("標準", "standard")],
+                value=app.cfg.content_policy,
+                label="コンテンツ方針",
+                scale=2,
             )
         with gr.Row():
             stop_btn = gr.Button("⏹ Stop", size="sm")
@@ -314,7 +319,12 @@ def build_ui(app: App) -> gr.Blocks:
             # re-read on every page load: the list built at startup is stale after new chats
             choices = session_choices(app)
             sid = choices[0][1] if choices else None
-            return sid, render_history(app, sid), gr.update(choices=choices, value=sid), status_markdown(app, content_policy)
+            return (
+                sid,
+                render_history(app, sid),
+                gr.update(choices=choices, value=sid),
+                status_markdown(app, content_policy),
+            )
 
         demo.load(on_load, content_policy, [session_state, chatbot, sessions_radio, status_md])
     return demo
