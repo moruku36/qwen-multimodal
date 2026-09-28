@@ -11,7 +11,7 @@ import contextlib
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Protocol, TypeVar, runtime_checkable
 
@@ -196,6 +196,12 @@ class ModelManager:
                     changed = model.degrade()
                     if changed:
                         self._status(f"{name}: switched to lower-VRAM settings")
+
+    @contextlib.contextmanager
+    def use(self, name: str) -> Iterator[ManagedModel]:
+        """Hold the GPU lock while ``name`` is active (used for streaming responses)."""
+        with self._lock:
+            yield self.ensure(name)
 
     def status(self) -> dict:
         return {
