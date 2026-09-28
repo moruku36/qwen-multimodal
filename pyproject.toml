@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qwen-multimodal-colab"
+version = "0.1.0"
+description = "Personal multimodal Qwen Web Chat (Qwen3.8-27B + Qwen-Image-2.1) running on Google Colab GPUs with a Gradio UI"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+  "gradio>=6.0,<7",
+  "pillow>=10",
+  "requests>=2.31",
+  "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# GPU runtime (installed on Colab via requirements-colab.txt; torch comes from Colab itself)
+gpu = [
+  "diffusers @ git+https://github.com/huggingface/diffusers@e0abab83b5df05de9e7abd788643c1a7c1e42e28",
+  "transformers>=5.17,<5.18",
+  "accelerate>=1,<2",
+  "safetensors",
+  "torchao",
+  "huggingface_hub>=1.0",
+]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+qmc = "qmc.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+  "gpu: requires a CUDA GPU and downloaded models (integration test)",
+]
+addopts = "-m 'not gpu'"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = ["E501", "B008"]

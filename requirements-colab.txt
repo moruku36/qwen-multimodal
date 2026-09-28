@@ -1,0 +1,12 @@
+# Installed on Google Colab on top of Colab's preinstalled torch / CUDA.
+# torch is intentionally NOT listed: reinstalling it breaks Colab's CUDA stack.
+-r requirements.txt
+# Qwen-Image-2.1 (QwenImage21Pipeline) is only in diffusers main (0.41.0.dev0) at the time of writing.
+# Pinned to a verified commit for reproducibility; see docs/phase0-research.md.
+diffusers @ git+https://github.com/huggingface/diffusers@e0abab83b5df05de9e7abd788643c1a7c1e42e28
+# Same range as the working Qwen-Image-2.1-Colab-Pro.ipynb (Qwen3-VL text encoder)
+transformers>=5.17,<5.18
+accelerate>=1,<2
+safetensors
+torchao
+huggingface_hub>=1.0
