@@ -66,6 +66,13 @@ class MockChatModel(_MockManaged):
             request = text.rsplit("User request:", 1)[-1].strip()
             yield ChatDelta(content=f"[rewritten] {request}")
             return
+        if "Output ONLY the query" in text:
+            request = text.rsplit("User request:", 1)[-1].strip()
+            yield ChatDelta(content=f"{request} 最新")
+            return
+        if "## Web検索結果" in str(messages[0].get("content", "")):
+            yield ChatDelta(content="（モック）検索結果によると [1] です。")
+            return
         if params.thinking:
             yield ChatDelta(reasoning="(mock) ユーザーの質問を整理しています…")
         reply = f"（モック応答）受け取ったメッセージ: 「{text.strip()[-200:]}」"
@@ -118,3 +125,26 @@ class MockImageModel(_MockManaged):
 def _chunks(text: str, n: int) -> Iterator[str]:
     for i in range(0, len(text), n):
         yield text[i : i + n]
+
+
+class MockSearchProvider:
+    """Deterministic offline search provider for tests and --mock."""
+
+    name = "mock"
+
+    def __init__(self):
+        self.queries: list[str] = []
+
+    def search(self, query: str, max_results: int):
+        from ..search_engine import SearchResult  # noqa: PLC0415
+
+        self.queries.append(query)
+        return [
+            SearchResult(
+                title=f"モック記事 {i}: {query}",
+                url=f"https://example.com/{i}",
+                snippet=f"{query} に関するモックの検索結果 {i}",
+                published="2026-09-28",
+            )
+            for i in range(1, min(max_results, 3) + 1)
+        ]
