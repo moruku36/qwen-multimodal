@@ -64,3 +64,10 @@ def test_snapshot_summary():
     )
     assert "10.0/22.0" in s.summary()
     assert MemorySnapshot().summary() == "VRAM: n/a"
+
+
+def test_bench_markdown():
+    from qmc.bench import Row, to_markdown
+
+    md = to_markdown([Row("baseline", 0.0, 1.0, 1.2, None, None, None)], "NVIDIA L4", "l4")
+    assert "| baseline | 0.0 | 1.0 | 1.2 | - |" in md
