@@ -155,3 +155,12 @@ def test_prompt_rewrite_auto_uses_loaded_chat(app):
     run(app, sid, "猫の絵を描いて", options=TurnOptions(image=ImageOptions(steps=1), prompt_rewrite="auto"))
     g = app.sessions.generations(sid)[-1]
     assert g["effective_prompt"].startswith("[rewritten]")
+
+
+def test_image_rewrite_refusal_uses_original(app, monkeypatch):
+    monkeypatch.setattr(app.controller.chat, "rewrite_image_prompt", lambda *a: "お答えできません")
+    sid = app.sessions.create_session()
+    run(app, sid, "成人の肖像を描いて", options=TurnOptions(
+        image=ImageOptions(steps=1), prompt_rewrite="on"
+    ))
+    assert app.sessions.generations(sid)[-1]["effective_prompt"] == "成人の肖像を描いて"

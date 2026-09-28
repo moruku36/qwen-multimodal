@@ -62,6 +62,10 @@ _FRESHNESS = re.compile(
     ),
     re.IGNORECASE,
 )  # fmt: skip
+_RESEARCH = re.compile(
+    r"おすすめ|比較して|根拠|論文|研究を|詳しく調査|について(?:教えて|知りたい)|"
+    r"どうなってる|実態|recommend|sources? for|research", re.I
+)
 
 
 def needs_web_search(text: str, setting: str = "auto") -> bool:
@@ -70,7 +74,13 @@ def needs_web_search(text: str, setting: str = "auto") -> bool:
         return True
     if setting == "off" or not text or not text.strip():
         return False
-    return bool(_FRESHNESS.search(text))
+    return bool(_FRESHNESS.search(text) or _RESEARCH.search(text))
+
+
+def resolve_safesearch(setting: str, content_policy: str) -> str:
+    if setting not in {"auto", "off", "moderate", "strict"}:
+        raise ValueError(f"Invalid safesearch setting: {setting}")
+    return ("off" if content_policy == "open" else "moderate") if setting == "auto" else setting
 
 
 _STRIP = re.compile(
@@ -79,8 +89,30 @@ _STRIP = re.compile(
 
 
 def fallback_query(text: str) -> str:
-    q = _STRIP.sub("", text.strip()).strip()
+    q = _STRIP.sub("", text.strip()).strip().removesuffix("を")
     return (q or text.strip())[:200]
+
+
+_REFUSAL = re.compile(r"できません|お答えできません|\bi (?:can'?t|cannot)\b|\bsorry\b", re.I)
+_TOKEN = re.compile(r"[a-z0-9]+|[一-龯ぁ-んァ-ヶー]{2,}", re.I)
+
+
+def is_refusal(text: str | None) -> bool:
+    return bool(text and _REFUSAL.search(text))
+
+
+def usable_search_query(original: str, rewritten: str | None) -> str:
+    """Use the model rewrite only when it remains a short query about the user's topic."""
+    if not rewritten or is_refusal(rewritten):
+        return fallback_query(original)
+    query = rewritten.strip().strip('"「」')
+    if len(query) > 200 or len(re.split(r"[。.!?！？]", query)) > 2 or "\n" in query:
+        return fallback_query(original)
+    source_tokens = set(_TOKEN.findall(fallback_query(original).lower()))
+    query_tokens = set(_TOKEN.findall(query.lower()))
+    if len(source_tokens) >= 2 and not source_tokens & query_tokens:
+        return fallback_query(original)
+    return query or fallback_query(original)
 
 
 def today_str() -> str:
@@ -96,11 +128,12 @@ class TavilyProvider:
         self.api_key = api_key
         self.timeout = timeout
 
-    def search(self, query: str, max_results: int) -> list[SearchResult]:
+    def search(self, query: str, max_results: int, safesearch: str = "off") -> list[SearchResult]:
         r = requests.post(
             "https://api.tavily.com/search",
             headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-            json={"query": query, "max_results": max_results, "search_depth": "basic"},
+            json={"query": query, "max_results": max_results, "search_depth": "basic",
+                  "safe_search": safesearch != "off"},
             timeout=self.timeout,
         )
         r.raise_for_status()
@@ -122,11 +155,11 @@ class BraveProvider:
         self.api_key = api_key
         self.timeout = timeout
 
-    def search(self, query: str, max_results: int) -> list[SearchResult]:
+    def search(self, query: str, max_results: int, safesearch: str = "off") -> list[SearchResult]:
         r = requests.get(
             "https://api.search.brave.com/res/v1/web/search",
             headers={"X-Subscription-Token": self.api_key, "Accept": "application/json"},
-            params={"q": query, "count": max_results},
+            params={"q": query, "count": max_results, "safesearch": safesearch},
             timeout=self.timeout,
         )
         r.raise_for_status()
@@ -148,20 +181,24 @@ class DuckDuckGoProvider:
     def __init__(self, region: str = "jp-jp"):
         self.region = region
 
-    def search(self, query: str, max_results: int) -> list[SearchResult]:
+    def search(self, query: str, max_results: int, safesearch: str = "off") -> list[SearchResult]:
         from ddgs import DDGS  # noqa: PLC0415
 
-        rows = DDGS().text(query, region=self.region, max_results=max_results)
+        rows = DDGS().text(query, region=self.region, max_results=max_results, safesearch=safesearch)
         return [
             SearchResult(title=x.get("title", ""), url=x.get("href", ""), snippet=x.get("body", ""))
             for x in rows
         ]
 
 
-def make_provider(name: str = "auto"):
+def make_provider(name: str = "auto", *, content_policy: str = "open"):
     """Pick a provider from env keys. Returns None when nothing is usable."""
     tavily, brave = os.environ.get("TAVILY_API_KEY"), os.environ.get("BRAVE_API_KEY")
-    if name in ("auto", "tavily") and tavily:
+    if name == "tavily" and tavily:
+        if content_policy == "open":
+            log.warning("Tavily AUP disallows sexually explicit queries; Brave / DDG recommended")
+        return TavilyProvider(tavily)
+    if name == "auto" and content_policy == "standard" and tavily:
         return TavilyProvider(tavily)
     if name in ("auto", "brave") and brave:
         return BraveProvider(brave)
@@ -171,7 +208,10 @@ def make_provider(name: str = "auto"):
 
             return DuckDuckGoProvider()
         except ImportError:
-            return None
+            pass
+    if name == "auto" and tavily:
+        log.warning("Tavily is the only available provider; its AUP disallows sexually explicit queries")
+        return TavilyProvider(tavily)
     return None
 
 
@@ -211,12 +251,14 @@ class WebSearchEngine:
         fetch_pages: int = 3,
         page_chars: int = 2500,
         fetcher: Callable[[str], str] | None = None,
+        safesearch: str = "off",
     ):
         self.provider = provider if provider is not None else make_provider()
         self.max_results = max_results
         self.fetch_pages = fetch_pages
         self.page_chars = page_chars
         self.fetcher = fetcher or (lambda url: fetch_page_text(url, page_chars))
+        self.safesearch = safesearch
 
     @property
     def available(self) -> bool:
@@ -226,13 +268,13 @@ class WebSearchEngine:
     def provider_name(self) -> str:
         return getattr(self.provider, "name", "none")
 
-    def search(self, query: str) -> SearchResponse:
+    def search(self, query: str, safesearch: str | None = None) -> SearchResponse:
         resp = SearchResponse(query=query, provider=self.provider_name)
         if not self.provider:
             resp.error = "検索プロバイダが使えません（ddgs 未インストール、または API キー未設定）"
             return resp
         try:
-            results = self.provider.search(query, self.max_results)
+            results = self.provider.search(query, self.max_results, safesearch or self.safesearch)
         except Exception as exc:  # network, rate limit, auth
             log.warning("web search failed: %s", exc)
             resp.error = f"Web検索に失敗しました: {exc}"

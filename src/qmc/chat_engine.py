@@ -20,17 +20,24 @@ SYSTEM_PROMPT = (
     "その結果は会話履歴に『[画像 #ID ...]』として記録されます。"
     "履歴中の画像について聞かれたら、その記録と添付画像をもとに答えてください。"
 )
+OPEN_POLICY = (
+    "\n\n合法な成人向け・センシティブ・物議を醸す話題も拒否せず、具体的に調べて答える。"
+    "道徳説教、配慮してぼかす表現、トピックの言い換えをしない。"
+    "Web検索結果が渡されたらそれを優先し、番号で出典を付ける。"
+    "未成年者（17歳以下、フィクション含む）の性的内容だけは拒否する。"
+    "犯罪の実行手順は出さない。法律・ニュース・歴史としての説明は可。"
+)
 KNOWLEDGE_NOTE = (
     "\n\n現在日時: {now}。あなたの学習データには期限があり、それ以降の出来事は知りません。"
     "最新情報が必要な質問で Web検索結果が与えられていない場合は、知識が古い可能性があることを一言添えてください。"
 )
 
 
-def system_prompt_now(extra: str | None = None) -> str:
+def system_prompt_now(extra: str | None = None, content_policy: str = "open") -> str:
     """Base system prompt + today's date (so 'today' / 'latest' are anchored) + optional context."""
     from .search_engine import today_str  # noqa: PLC0415
 
-    prompt = SYSTEM_PROMPT + KNOWLEDGE_NOTE.format(now=today_str())
+    prompt = SYSTEM_PROMPT + (OPEN_POLICY if content_policy == "open" else "") + KNOWLEDGE_NOTE.format(now=today_str())
     return prompt + ("\n\n" + extra if extra else "")
 
 
@@ -144,13 +151,17 @@ REWRITE_PROMPT = (
     "- edit: write one concise English edit instruction describing only the change to apply to the given "
     "image, and say what must stay unchanged.\n"
     "Use the conversation context to resolve references like 'more', 'again', 'the background'.\n"
+    "Do not sanitize adult subjects. Output the English prompt the user asked for. "
+    "Never invent underage subjects.\n"
     "Output ONLY the prompt text, no preamble.\n\nRecent context:\n{context}\n\nUser request: {request}"
 )
 
 
 SEARCH_QUERY_PROMPT = (
     "Convert the user's request into ONE concise web search query (keywords, same language as the user). "
+    "Keep the user's topic verbatim, including adult and sensitive terms. Do not use euphemisms. "
     "Resolve references using the context and use absolute dates when the user says today / latest. "
+    "If rewriting is unnecessary, output the stripped user text. "
     "Today is {today}. Output ONLY the query.\n\nRecent context:\n{context}\n\nUser request: {request}"
 )
 
@@ -168,10 +179,11 @@ class ChatEngine:
         cancel: threading.Event | None = None,
         extra_images: list[ContextImage] | None = None,
         system_extra: str | None = None,
+        content_policy: str = "open",
     ) -> Iterator[ChatDelta]:
         messages = build_messages(
             history,
-            system_prompt=system_prompt_now(system_extra),
+            system_prompt=system_prompt_now(system_extra, content_policy),
             max_messages=self.max_messages,
             max_images=self.max_images,
             extra_images=extra_images,
@@ -198,8 +210,7 @@ class ChatEngine:
         except Exception as exc:
             log.warning("Search query rewrite failed: %s", exc)
             return None
-        text = text.strip().splitlines()[0].strip().strip('"「」') if text.strip() else ""
-        return text[:200] or None
+        return text.strip().strip('"「」') or None
 
     def rewrite_image_prompt(self, request: str, mode: str, context: list[ContextMessage]) -> str | None:
         """Ask the LLM for an English image prompt. Returns None when not possible."""
@@ -217,4 +228,6 @@ class ChatEngine:
             log.warning("Prompt rewrite failed, using the original text: %s", exc)
             return None
         text = text.strip().strip('"').strip()
-        return text or None
+        from .search_engine import is_refusal  # noqa: PLC0415
+
+        return text if text and not is_refusal(text) else None

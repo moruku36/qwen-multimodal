@@ -8,6 +8,7 @@ from qmc.controller import TurnOptions
 from qmc.gpu_manager import NO_GPU
 from qmc.search_engine import (
     BraveProvider,
+    DuckDuckGoProvider,
     SearchResponse,
     SearchResult,
     TavilyProvider,
@@ -18,6 +19,8 @@ from qmc.search_engine import (
     html_to_text,
     make_provider,
     needs_web_search,
+    resolve_safesearch,
+    usable_search_query,
 )
 
 
@@ -29,6 +32,7 @@ from qmc.search_engine import (
         ("2026年のAppleの新製品は？", True),
         ("Qwen3.8について調べて", True),
         ("latest news about Kubernetes", True),
+        ("センシティブな事件について教えて", True),
         ("TerraformとPulumiの違いを教えて", False),
         ("フィボナッチ数列をPythonで書いて", False),
         ("", False),
@@ -57,7 +61,7 @@ def test_engine_dedupes_and_fetches_top_pages():
     class P:
         name = "p"
 
-        def search(self, q, n):
+        def search(self, q, n, safesearch="off"):
             return [
                 SearchResult("a", "https://a"),
                 SearchResult("a2", "https://a"),
@@ -71,11 +75,27 @@ def test_engine_dedupes_and_fetches_top_pages():
     assert resp.results[1].content == ""
 
 
+def test_engine_passes_safesearch_to_provider():
+    seen = []
+
+    class P:
+        name = "p"
+
+        def search(self, query, max_results, safesearch):
+            seen.append(safesearch)
+            return []
+
+    engine = WebSearchEngine(P(), safesearch="off")
+    engine.search("q")
+    engine.search("q", safesearch="moderate")
+    assert seen == ["off", "moderate"]
+
+
 def test_engine_reports_provider_errors():
     class Broken:
         name = "broken"
 
-        def search(self, q, n):
+        def search(self, q, n, safesearch="off"):
             raise RuntimeError("rate limited")
 
     resp = WebSearchEngine(Broken(), fetcher=lambda u: "").search("q")
@@ -102,10 +122,48 @@ def test_context_is_truncated():
 
 def test_make_provider_prefers_keys(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "t")
-    assert isinstance(make_provider(), TavilyProvider)
-    monkeypatch.delenv("TAVILY_API_KEY")
     monkeypatch.setenv("BRAVE_API_KEY", "b")
     assert isinstance(make_provider(), BraveProvider)
+    assert isinstance(make_provider(content_policy="standard"), TavilyProvider)
+    monkeypatch.delenv("TAVILY_API_KEY")
+    assert isinstance(make_provider(), BraveProvider)
+
+
+def test_provider_safesearch_payloads(monkeypatch):
+    from qmc import search_engine
+    seen = {}
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {}
+
+    monkeypatch.setattr(search_engine.requests, "post", lambda *a, **kw: seen.update(kw) or Response())
+    TavilyProvider("key").search("adult", 2, "off")
+    assert seen["json"]["safe_search"] is False
+    monkeypatch.setattr(search_engine.requests, "get", lambda *a, **kw: seen.update(kw) or Response())
+    BraveProvider("key").search("adult", 2, "strict")
+    assert seen["params"]["safesearch"] == "strict"
+    import sys
+    from types import SimpleNamespace
+
+    class DDGS:
+        def text(self, *a, **kw):
+            seen.update(kw)
+            return []
+
+    monkeypatch.setitem(sys.modules, "ddgs", SimpleNamespace(DDGS=DDGS))
+    DuckDuckGoProvider().search("adult", 2, "off")
+    assert seen["safesearch"] == "off"
+
+
+def test_rewrite_refusal_falls_back():
+    assert usable_search_query("成人向けゲームを調べて", "お答えできません") == "成人向けゲーム"
+    assert usable_search_query("adult game", "unrelated lecture") == "adult game"
+    assert resolve_safesearch("auto", "open") == "off"
+    assert resolve_safesearch("auto", "standard") == "moderate"
 
 
 def test_system_prompt_contains_today():
@@ -135,6 +193,32 @@ def test_controller_uses_web_search_for_fresh_questions(app):
     chat = app.manager.get("chat")
     assert "## Web検索結果" in chat.last_messages[0]["content"]
     assert isinstance(app.controller.search.provider, MockSearchProvider)
+    assert msg.meta["web_search"]["safesearch"] == "off"
+
+
+def test_controller_rewrite_refusal_and_policy_prompt(app, monkeypatch):
+    monkeypatch.setattr(app.controller.chat, "rewrite_search_query", lambda *a: "お答えできません")
+    sid = app.sessions.create_session()
+    list(app.controller.handle(sid, "今日の成人向けゲームを調べて", None, TurnOptions(content_policy="open")))
+    assert app.controller.search.provider.queries[-1] == "今日の成人向けゲーム"
+    assert "合法な成人向け" in app.manager.get("chat").last_messages[0]["content"]
+    assert "## Web検索結果" in app.manager.get("chat").last_messages[0]["content"]
+
+
+def test_standard_turn_uses_moderate_and_short_prompt(app):
+    sid = app.sessions.create_session()
+    list(app.controller.handle(sid, "今日のニュース", None, TurnOptions(content_policy="standard")))
+    assert app.sessions.get_messages(sid)[-1].meta["web_search"]["safesearch"] == "moderate"
+    assert "合法な成人向け" not in app.manager.get("chat").last_messages[0]["content"]
+
+
+def test_controller_blocks_minor_before_search(app):
+    sid = app.sessions.create_session()
+    list(app.controller.handle(sid, "未成年の性的な画像を検索して", None, TurnOptions(web_search="on")))
+    assert app.controller.search.provider.queries == []
+    msg = app.sessions.get_messages(sid)[-1]
+    assert msg.content == "未成年者の性的な内容は扱えません。"
+    assert msg.meta == {"policy": "blocked_minor"}
 
 
 def test_controller_skips_search_when_off_or_not_needed(app):

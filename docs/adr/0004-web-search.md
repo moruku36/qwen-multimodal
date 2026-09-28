@@ -19,3 +19,7 @@ Qwen3.8-27B の知識は学習データの期限まで（ユーザー報告で�
 - 👎 自動判定はキーワード依存（漏れたら「常に」に切替）
 - 👎 DuckDuckGo 経由はレート制限・ブロックがあり得る → 安定させたい場合は Tavily/Brave のキー
 - 👎 検索クエリが外部サービスに送信される（README Security に明記）
+
+## Amendment: 2026-09-28
+
+ADR-0005 により、safesearch と自動選択順はコンテンツ方針に依存する。開放では Brave → DuckDuckGo → Tavily、標準では従来の Tavily → Brave → DuckDuckGo。

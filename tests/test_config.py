@@ -11,12 +11,20 @@ def test_env_overrides(monkeypatch, tmp_path):
     monkeypatch.setenv("QMC_GPU_PROFILE", "l4")
     monkeypatch.setenv("QMC_SHARE", "false")
     monkeypatch.setenv("QMC_CHAT_BASE_URL", "http://example:8000/v1")
+    monkeypatch.setenv("QMC_CONTENT_POLICY", "standard")
+    monkeypatch.setenv("QMC_SEARCH_SAFESEARCH", "off")
+    monkeypatch.setenv("QMC_CHAT_HF_REPO", "owner/custom-gguf")
+    monkeypatch.setenv("QMC_CHAT_REMOTE_MODEL_NAME", "custom-model")
     cfg = load_config()
     assert cfg.data_dir == tmp_path
     assert cfg.mock is True
     assert cfg.gpu_profile_override == "l4"
     assert cfg.share is False
     assert cfg.chat.remote_base_url == "http://example:8000/v1"
+    assert cfg.content_policy == "standard"
+    assert cfg.search_safesearch == "off"
+    assert cfg.chat.hf_repo == "owner/custom-gguf"
+    assert cfg.chat.remote_model_name == "custom-model"
 
 
 def test_paths(tmp_path):

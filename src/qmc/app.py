@@ -45,20 +45,22 @@ class App:
 def build_search(cfg: AppConfig):
     if cfg.web_search == "off":
         return None
-    from .search_engine import WebSearchEngine, make_provider
+    from .search_engine import WebSearchEngine, make_provider, resolve_safesearch
+
+    safesearch = resolve_safesearch(cfg.search_safesearch, cfg.content_policy)
 
     if cfg.mock:
         from .backends.mock import MockSearchProvider
 
-        return WebSearchEngine(MockSearchProvider(), fetcher=lambda url: "")
-    provider = make_provider(cfg.search_provider)
+        return WebSearchEngine(MockSearchProvider(), fetcher=lambda url: "", safesearch=safesearch)
+    provider = make_provider(cfg.search_provider, content_policy=cfg.content_policy)
     if provider is None:
         log.warning(
             "Web search disabled: no provider (pip install ddgs, or set TAVILY_API_KEY / BRAVE_API_KEY)"
         )
         return None
     log.info("Web search provider: %s", provider.name)
-    return WebSearchEngine(provider, max_results=cfg.search_max_results)
+    return WebSearchEngine(provider, max_results=cfg.search_max_results, safesearch=safesearch)
 
 
 def build_app(cfg: AppConfig, gpu: GPUInfo | None = None) -> App:
@@ -98,5 +100,7 @@ def build_app(cfg: AppConfig, gpu: GPUInfo | None = None) -> App:
         max_upload_mb=cfg.max_upload_mb,
         after_turn=store.sync,
         search=build_search(cfg),
+        content_policy=cfg.content_policy,
+        search_safesearch=cfg.search_safesearch,
     )
     return App(cfg, gpu, profile, store, sessions, manager, controller)
