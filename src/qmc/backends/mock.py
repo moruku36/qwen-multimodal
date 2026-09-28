@@ -135,7 +135,7 @@ class MockSearchProvider:
     def __init__(self):
         self.queries: list[str] = []
 
-    def search(self, query: str, max_results: int):
+    def search(self, query: str, max_results: int, safesearch: str = "off"):
         from ..search_engine import SearchResult  # noqa: PLC0415
 
         self.queries.append(query)

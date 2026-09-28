@@ -80,6 +80,8 @@ class AppConfig:
     prompt_rewrite: str = "auto"  # auto | on | off: LLM rewrites image prompts to English
     thinking_default: bool = False
     web_search: str = "auto"  # auto | on | off (default for the UI toggle)
+    content_policy: str = "open"  # open | standard
+    search_safesearch: str = "auto"  # auto | off | moderate | strict
     search_provider: str = "auto"  # auto | tavily | brave | duckduckgo
     search_max_results: int = 5
     max_context_messages: int = 24
@@ -143,6 +145,8 @@ def load_config(**overrides) -> AppConfig:
     cfg.prompt_rewrite = _env("QMC_PROMPT_REWRITE", cfg.prompt_rewrite) or "auto"
     cfg.thinking_default = _env_bool("QMC_THINKING", cfg.thinking_default)
     cfg.web_search = _env("QMC_WEB_SEARCH", cfg.web_search) or "auto"
+    cfg.content_policy = _env("QMC_CONTENT_POLICY", cfg.content_policy) or "open"
+    cfg.search_safesearch = _env("QMC_SEARCH_SAFESEARCH", cfg.search_safesearch) or "auto"
     cfg.search_provider = _env("QMC_SEARCH_PROVIDER", cfg.search_provider) or "auto"
     cfg.search_max_results = _env_int("QMC_SEARCH_MAX_RESULTS", cfg.search_max_results)
     cfg.share = _env_bool("QMC_SHARE", cfg.share)
@@ -156,10 +160,12 @@ def load_config(**overrides) -> AppConfig:
     if _env("HF_HOME"):
         cfg.hf_cache_dir = Path(_env("HF_HOME"))
 
+    cfg.chat.hf_repo = _env("QMC_CHAT_HF_REPO", cfg.chat.hf_repo)
     cfg.chat.model_file = _env("QMC_CHAT_MODEL_FILE", cfg.chat.model_file)
     cfg.chat.mmproj_file = _env("QMC_CHAT_MMPROJ_FILE", cfg.chat.mmproj_file)
     cfg.chat.remote_base_url = _env("QMC_CHAT_BASE_URL")
     cfg.chat.remote_api_key = _env("QMC_CHAT_API_KEY")
+    cfg.chat.remote_model_name = _env("QMC_CHAT_REMOTE_MODEL_NAME", cfg.chat.remote_model_name)
     if _env("QMC_CHAT_CTX"):
         cfg.chat.ctx_size = _env_int("QMC_CHAT_CTX", 0) or None
     cfg.image.precision = _env("QMC_IMAGE_PRECISION", cfg.image.precision) or "auto"

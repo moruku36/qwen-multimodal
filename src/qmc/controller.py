@@ -19,13 +19,16 @@ from .chat_engine import ChatEngine, ContextImage, ContextMessage
 from .image_engine import ImageEngine, ImageOptions
 from .imaging import InvalidImageError, load_user_image
 from .model_manager import CHAT, IMAGE, ModelManager
+from .policy import MINOR_REFUSAL, blocks_minor_sexual_request
 from .router import ImageTarget, Intent, Mode, RouteContext, RouteDecision, route
 from .search_engine import (
     WebSearchEngine,
     build_search_context,
-    fallback_query,
     format_sources,
+    is_refusal,
     needs_web_search,
+    resolve_safesearch,
+    usable_search_query,
 )
 from .session_manager import ImageRecord, MessageRecord, SessionManager
 from .vision_engine import VisionEngine
@@ -46,6 +49,7 @@ class TurnOptions:
     image: ImageOptions = field(default_factory=ImageOptions)
     prompt_rewrite: str = "auto"  # auto | on | off
     web_search: str = "auto"  # auto | on | off
+    content_policy: str | None = None  # None -> application default
 
 
 _SENTINEL = object()
@@ -64,6 +68,8 @@ class ChatController:
         max_upload_mb: int = 30,
         after_turn: Callable[[], None] | None = None,
         search: WebSearchEngine | None = None,
+        content_policy: str = "open",
+        search_safesearch: str = "auto",
     ):
         self.sessions = sessions
         self.manager = manager
@@ -74,6 +80,8 @@ class ChatController:
         self.max_upload_mb = max_upload_mb
         self.after_turn = after_turn
         self.search = search
+        self.content_policy = content_policy
+        self.search_safesearch = search_safesearch
         self.cancel_event = threading.Event()
         self._status_q: queue.Queue = queue.Queue()
         manager.on_status = self._status_q.put
@@ -132,6 +140,16 @@ class ChatController:
         decision = route(user_msg.content, self._route_context(session_id, user_msg), options.mode)
         self.sessions.update_message(user_msg_id, intent=decision.intent.value)
         yield Event("route", decision)
+        if blocks_minor_sexual_request(user_msg.content):
+            self.sessions.add_message(
+                session_id, "assistant", MINOR_REFUSAL,
+                intent=decision.intent.value, meta={"policy": "blocked_minor"},
+            )
+            if self.after_turn:
+                self.after_turn()
+            yield Event("text", MINOR_REFUSAL)
+            yield Event("done", None)
+            return
         for w in decision.warnings:
             yield Event("status", w)
         try:
@@ -239,6 +257,7 @@ class ChatController:
         self, session_id: str, user_msg: MessageRecord, decision: RouteDecision, options: TurnOptions
     ) -> Iterator[Event]:
         history = self._context(session_id, user_msg.id)
+        policy = options.content_policy or self.content_policy
         params = ChatParams(thinking=options.thinking)
         if not self.manager.is_loaded(CHAT):
             yield Event("status", "Qwen3.8-27B をロード中…（初回・モデル切替時は1〜2分かかります）")
@@ -256,7 +275,8 @@ class ChatController:
 
             def gen():
                 return self.vision.stream(
-                    history, targets, params, self.cancel_event, compare=decision.compare
+                    history, targets, params, self.cancel_event, compare=decision.compare,
+                    content_policy=policy,
                 )
         else:
             system_extra, sources_md, search_meta = None, "", None
@@ -267,7 +287,8 @@ class ChatController:
                     system_extra, sources_md, search_meta = ev
 
             def gen():
-                return self.chat.stream(history, params, self.cancel_event, system_extra=system_extra)
+                return self.chat.stream(history, params, self.cancel_event, system_extra=system_extra,
+                                        content_policy=policy)
 
         content, reasoning = [], []
 
@@ -312,6 +333,8 @@ class ChatController:
     def _web_search(self, session_id: str, user_msg: MessageRecord, options: TurnOptions):
         """Yields status Events, then one (system_extra, sources_md, meta) tuple."""
         text = user_msg.content
+        policy = options.content_policy or self.content_policy
+        safesearch = resolve_safesearch(self.search_safesearch, policy)
         if not needs_web_search(text, options.web_search):
             yield (None, "", None)
             return
@@ -322,15 +345,23 @@ class ChatController:
             return
         yield Event("status", "🔎 検索クエリを作成中…")
         history = self._context(session_id, user_msg.id)[:-1]
-        query = self.chat.rewrite_search_query(text, history) or fallback_query(text)
+        rewritten = self.chat.rewrite_search_query(text, history)
+        query = usable_search_query(text, rewritten)
+        log.info("Web search query: original=%r effective=%r", text, query)
+        if policy == "open" and self.search.provider_name == "tavily":
+            yield Event("status", "⚠️ Tavily は成人向け検索を規約で禁じています。Brave / DDG を推奨")
         yield Event("status", f"🔎 Web検索中: {query}")
-        resp = self.search.search(query)
+        resp = self.search.search(query, safesearch=safesearch)
+        meta = {"query": query, "original": text, "rewritten": rewritten,
+                "provider": resp.provider, "urls": [r.url for r in resp.results],
+                "safesearch": safesearch}
         if resp.error or not resp.results:
             yield Event("status", resp.error or f"🔎 「{query}」の検索結果がありませんでした")
-            yield (None, "", {"query": query, "provider": resp.provider, "error": resp.error, "urls": []})
+            meta["error"] = resp.error
+            yield (f"Web検索を行いましたが「{query}」の結果は得られませんでした。"
+                   "検索結果が無いことを伝え、未確認の情報を断定しないでください。", "", meta)
             return
         yield Event("status", f"📄 {len(resp.results)}件の結果を読み込みました（{resp.provider}）")
-        meta = {"query": query, "provider": resp.provider, "urls": [r.url for r in resp.results]}
         yield (build_search_context(resp), format_sources(resp), meta)
 
     # ------------------------------------------------------------------ generate / edit
@@ -351,7 +382,7 @@ class ChatController:
             rewritten = self.chat.rewrite_image_prompt(
                 instruction, "edit" if is_edit else "generate", self._context(session_id, user_msg.id)[:-1]
             )
-            if rewritten:
+            if rewritten and not is_refusal(rewritten):
                 effective = rewritten
                 yield Event("status", f"画像プロンプト: {effective}")
 
