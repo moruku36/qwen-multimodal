@@ -23,7 +23,7 @@ gpu = [
   "transformers>=5.17,<5.18",
   "accelerate>=1,<2",
   "safetensors",
-  "torchao",
+  "torchao>=0.13",
   "huggingface_hub>=1.0",
 ]
 dev = ["pytest>=8", "ruff>=0.6"]
