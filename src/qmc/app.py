@@ -33,8 +33,32 @@ class App:
         return getattr(self.manager.get("chat"), "label", "chat")
 
     @property
+    def search_label(self) -> str:
+        search = self.controller.search
+        return search.provider_name if search and search.available else "無効"
+
+    @property
     def image_label(self) -> str:
         return getattr(self.manager.get("image"), "label", "image")
+
+
+def build_search(cfg: AppConfig):
+    if cfg.web_search == "off":
+        return None
+    from .search_engine import WebSearchEngine, make_provider
+
+    if cfg.mock:
+        from .backends.mock import MockSearchProvider
+
+        return WebSearchEngine(MockSearchProvider(), fetcher=lambda url: "")
+    provider = make_provider(cfg.search_provider)
+    if provider is None:
+        log.warning(
+            "Web search disabled: no provider (pip install ddgs, or set TAVILY_API_KEY / BRAVE_API_KEY)"
+        )
+        return None
+    log.info("Web search provider: %s", provider.name)
+    return WebSearchEngine(provider, max_results=cfg.search_max_results)
 
 
 def build_app(cfg: AppConfig, gpu: GPUInfo | None = None) -> App:
@@ -73,5 +97,6 @@ def build_app(cfg: AppConfig, gpu: GPUInfo | None = None) -> App:
         max_image_side=cfg.max_image_side,
         max_upload_mb=cfg.max_upload_mb,
         after_turn=store.sync,
+        search=build_search(cfg),
     )
     return App(cfg, gpu, profile, store, sessions, manager, controller)

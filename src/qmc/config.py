@@ -79,6 +79,9 @@ class AppConfig:
     mock: bool = False  # CPU-only fake backends for development and UI tests
     prompt_rewrite: str = "auto"  # auto | on | off: LLM rewrites image prompts to English
     thinking_default: bool = False
+    web_search: str = "auto"  # auto | on | off (default for the UI toggle)
+    search_provider: str = "auto"  # auto | tavily | brave | duckduckgo
+    search_max_results: int = 5
     max_context_messages: int = 24
     max_context_images: int = 3
     max_upload_mb: int = 30
@@ -139,6 +142,9 @@ def load_config(**overrides) -> AppConfig:
     cfg.gpu_profile_override = _env("QMC_GPU_PROFILE", cfg.gpu_profile_override)
     cfg.prompt_rewrite = _env("QMC_PROMPT_REWRITE", cfg.prompt_rewrite) or "auto"
     cfg.thinking_default = _env_bool("QMC_THINKING", cfg.thinking_default)
+    cfg.web_search = _env("QMC_WEB_SEARCH", cfg.web_search) or "auto"
+    cfg.search_provider = _env("QMC_SEARCH_PROVIDER", cfg.search_provider) or "auto"
+    cfg.search_max_results = _env_int("QMC_SEARCH_MAX_RESULTS", cfg.search_max_results)
     cfg.share = _env_bool("QMC_SHARE", cfg.share)
     cfg.server_port = _env_int("QMC_PORT", cfg.server_port)
     cfg.auth_user = _env("QMC_AUTH_USER")
