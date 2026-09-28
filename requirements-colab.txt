@@ -8,5 +8,6 @@ diffusers @ git+https://github.com/huggingface/diffusers@e0abab83b5df05de9e7abd7
 transformers>=5.17,<5.18
 accelerate>=1,<2
 safetensors
-torchao
+# Colab preinstalls torchao 0.10, which lacks FqnToConfig needed by diffusers main (verified on Colab A100)
+torchao>=0.13
 huggingface_hub>=1.0

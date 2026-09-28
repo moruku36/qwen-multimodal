@@ -17,8 +17,9 @@ log = logging.getLogger(__name__)
 # llama.cpp commit verified to have every flag we use (see docs/phase0-research.md)
 LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp"
 LLAMA_CPP_COMMIT = "4da6337767f973e2b4d0797e5b323d77d8565e4a"
-# 80 = A100, 89 = L4, 90 = H100. Building all lets one Drive cache serve every Colab GPU.
-CUDA_ARCHS = "80;89;90"
+# 80 = A100, 89 = L4, 90 = H100. Only the current GPU's arch is built by default: on Colab A100
+# building all three took ~70+ min (measured), one arch is ~3x faster. The Drive cache is keyed by arch.
+FALLBACK_CUDA_ARCHS = "80;89"
 DRIVE_ROOT = Path("/content/drive/MyDrive")
 APP_DRIVE_DIR = DRIVE_ROOT / "qwen-multimodal-colab"
 SECRET_NAMES = ("HF_TOKEN", "QMC_AUTH_USER", "QMC_AUTH_PASSWORD", "QMC_CHAT_API_KEY", "QMC_CHAT_BASE_URL")
@@ -89,14 +90,47 @@ def setup(use_drive: bool = True) -> dict:
 
 
 # ---------------------------------------------------------------------- llama.cpp
+def detect_cuda_arch() -> str | None:
+    """Compute capability of GPU 0 as a CMake arch string, e.g. "8.0" -> "80"."""
+    try:
+        out = (
+            subprocess.run(
+                ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            )
+            .stdout.strip()
+            .splitlines()
+        )
+    except Exception:
+        return None
+    return parse_compute_cap(out[0]) if out else None
+
+
+def parse_compute_cap(value: str) -> str | None:
+    value = value.strip()
+    if not value or "." not in value:
+        return None
+    major, minor = value.split(".", 1)
+    return f"{major}{minor}" if major.isdigit() and minor.isdigit() else None
+
+
+def cuda_archs() -> str:
+    return os.environ.get("QMC_CUDA_ARCHS") or detect_cuda_arch() or FALLBACK_CUDA_ARCHS
+
+
 def llama_cache_dir(
-    base: Path | None = None, commit: str = LLAMA_CPP_COMMIT, archs: str = CUDA_ARCHS
+    base: Path | None = None, commit: str = LLAMA_CPP_COMMIT, archs: str | None = None
 ) -> Path:
+    archs = archs or cuda_archs()
     base = base or (APP_DRIVE_DIR / "llama-bin" if DRIVE_ROOT.exists() else Path("/content/llama-bin-cache"))
     return base / f"{commit[:10]}-sm{archs.replace(';', '_')}"
 
 
-def cmake_configure_cmd(src: Path, build: Path, archs: str = CUDA_ARCHS) -> list[str]:
+def cmake_configure_cmd(src: Path, build: Path, archs: str | None = None) -> list[str]:
+    archs = archs or cuda_archs()
     return [
         "cmake", "-S", str(src), "-B", str(build), "-G", "Ninja",
         "-DGGML_CUDA=ON",
@@ -117,7 +151,8 @@ def install_llama_cpp(
         print(f"✅ llama-server: {local_server}")
         return local_server
 
-    cache = llama_cache_dir()
+    archs = cuda_archs()
+    cache = llama_cache_dir(archs=archs)
     cached = cache / "llama-server"
     local_bin.mkdir(parents=True, exist_ok=True)
     if cached.exists():
@@ -127,7 +162,7 @@ def install_llama_cpp(
         print(f"✅ キャッシュから llama-server を復元: {cached}")
         return local_server
 
-    print("llama.cpp をビルドします（初回のみ。10〜20分程度）…")
+    print(f"llama.cpp をビルドします（初回のみ。CUDA arch {archs}、A100で約20〜30分）…")
     if shutil.which("ninja") is None or shutil.which("cmake") is None:
         _run(["apt-get", "install", "-y", "-qq", "cmake", "ninja-build"])
     if not (workdir / ".git").exists():
@@ -135,7 +170,7 @@ def install_llama_cpp(
     _run(["git", "-C", str(workdir), "fetch", "--depth", "1", "origin", LLAMA_CPP_COMMIT])
     _run(["git", "-C", str(workdir), "checkout", "-q", LLAMA_CPP_COMMIT])
     build = workdir / "build"
-    _run(cmake_configure_cmd(workdir, build))
+    _run(cmake_configure_cmd(workdir, build, archs))
     _run(
         [
             "cmake",
@@ -208,9 +243,34 @@ def launch(share: bool = False, mock: bool = False, port: int = 7860, profile: s
         f"GPU: {app.gpu.name} ({app.gpu.total_gib:.0f} GiB) → {app.profile.mode} (profile={app.profile.key})"
     )
     demo = build_ui(app)
-    ui_launch(app, demo, prevent_thread_lock=True, inline=False, quiet=True)
-    if in_colab() and not share:
-        from google.colab import output  # noqa: PLC0415
-
-        output.serve_kernel_port_as_window(port, anchor_text="▶ Qwen Multimodal Chat を開く")
+    # Behind the Colab port-forward proxy Gradio derives its API URL from the internal host
+    # (…internal:8007) and every API call fails with 503 (verified on Colab A100). Passing the
+    # public proxy URL as root_path fixes it.
+    root_path = colab_proxy_url(port) if in_colab() and not share else None
+    ui_launch(app, demo, prevent_thread_lock=True, inline=False, quiet=True, root_path=root_path)
+    app.demo = demo
+    if root_path:
+        _show_link(root_path)
     return app
+
+
+def colab_proxy_url(port: int) -> str | None:
+    """Public https URL of a kernel port (google.colab.kernel.proxyPort)."""
+    try:
+        from google.colab.output import eval_js  # noqa: PLC0415
+
+        url = eval_js(f"google.colab.kernel.proxyPort({int(port)})")
+    except Exception as exc:
+        print(f"⚠️ Colab のプロキシURLを取得できませんでした: {exc}")
+        return None
+    return str(url).rstrip("/") if url else None
+
+
+def _show_link(url: str) -> None:
+    try:
+        from IPython.display import HTML, display  # noqa: PLC0415
+
+        display(HTML(f'<a href="{url}/" target="_blank">▶ Qwen Multimodal Chat を開く</a>'))
+    except Exception:
+        pass
+    print(url + "/")
