@@ -63,3 +63,34 @@ def test_progress_and_cancel():
     cancel.set()
     with pytest.raises(Cancelled):
         engine.run(engine.build_request("x", ImageOptions(steps=4)), cancel=cancel)
+
+
+def test_edit_never_reuses_parent_seed():
+    from PIL import Image
+
+    engine, *_ = _engine()
+    src = Image.new("RGB", (640, 360))
+    req = engine.build_edit_request("brighter", [src], ImageOptions(seed=42), parent_seeds={42})
+    assert req.seed != 42
+    assert req.is_edit
+    assert req.width is None and req.height is None  # aspect follows the source image
+
+
+def test_edit_requires_source_and_caps_condition_images():
+    from PIL import Image
+
+    engine, *_ = _engine()
+    with pytest.raises(ValueError):
+        engine.build_edit_request("x", [], ImageOptions())
+    req = engine.build_edit_request("x", [Image.new("RGB", (8, 8))] * 12, ImageOptions())
+    assert len(req.images) == 10
+
+
+def test_edit_runs_on_mock_backend():
+    from PIL import Image
+
+    engine, _, _, image = _engine()
+    src = Image.new("RGB", (64, 64), (255, 255, 255))
+    out = engine.run(engine.build_edit_request("darker", [src], ImageOptions(steps=2)))
+    assert out.size == (512, 512)
+    assert image.requests[-1].is_edit
