@@ -1,0 +1,5 @@
+# Core (CPU-only parts; enough for `pytest` and `python -m qmc --mock`)
+gradio>=6.0,<7
+pillow>=10
+requests>=2.31
+numpy>=1.26
