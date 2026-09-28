@@ -3,9 +3,9 @@
 Google Colab の GPU をバックエンドにして、ブラウザから ChatGPT / Qwen Web 版のように使える**自分専用のマルチモーダル Qwen Web Chat**です。
 1つのチャット画面で、テキストチャット・画像の理解・画像生成・画像編集・会話の継続・履歴の保存と復元ができます。
 
-> **English summary** — A personal multimodal chat UI (Gradio) for Google Colab. Qwen3.8-27B (llama.cpp GGUF + mmproj) handles text, vision and reasoning; Qwen-Image-2.1 (diffusers) handles text-to-image and conversational image editing. It auto-detects A100 / L4 and picks a VRAM strategy, stores history in SQLite mirrored to Google Drive, and runs fully on CPU in `--mock` mode for development. **Status: CPU-side unit/E2E tests pass; not yet verified on a real Colab GPU** (see [Limitations](#15-limitations)).
+> **English summary** — A personal multimodal chat UI (Gradio) for Google Colab. Qwen3.8-27B (llama.cpp GGUF + mmproj) handles text, vision and reasoning; Qwen-Image-2.1 (diffusers) handles text-to-image and conversational image editing. It auto-detects A100 / L4 and picks a VRAM strategy, stores history in SQLite mirrored to Google Drive, and runs fully on CPU in `--mock` mode for development. **Status: verified end-to-end on Colab A100 80GB (chat, vision, generation, editing, comparison, GPU auto-detection); L4 / A100 40GB not yet verified** (see [Limitations](#15-limitations)).
 
-![UI (mock mode)](docs/images/ui-mock.png)
+![UI on Colab A100](docs/images/ui-a100-edit.jpg)
 
 ---
 
@@ -113,7 +113,7 @@ Notebook は4セルだけで、ロジックはすべて `src/qmc/` にありま�
 | セル | 内容 |
 | --- | --- |
 | 1 | リポジトリを clone（2回目以降は pull） |
-| 2 | `requirements-colab.txt` をインストール（**torch は入れ直さない**）、Drive マウント、`llama-server` を用意（初回ビルド 10〜20分 → Drive にキャッシュ、次回以降は数秒） |
+| 2 | `requirements-colab.txt` をインストール（**torch は入れ直さない**）、Drive マウント、`llama-server` を用意（初回は検出したGPUのCUDA archだけビルド。A100で約20〜30分 → Drive にキャッシュ、次回以降は数秒） |
 | 3 | 設定（`SHARE` / `PREFETCH` / `PROFILE`） |
 | 4 | `colab.launch()` で Gradio を起動し、Colab のプロキシURLを表示 |
 
@@ -189,17 +189,38 @@ MyDrive/qwen-multimodal-colab/
 - **CUDA OOM 時**: アプリは落ちず、`他モデルのunload → empty_cache → 省VRAM設定に降格 → 1回再試行` を行う
   - Qwen-Image の降格順: 全GPU常駐 → CPU offload → VAE タイリング → DiT int8
   - llama-server: コンテキスト長を半分に、`--fit-target` を増やして再起動
-- 計測: `python -m qmc.bench` で各フェーズ（ロード直後 / テキスト生成 / Vision / 生成 / 編集 / unload後）の `memory_allocated` / `memory_reserved` / `max_memory_allocated` / nvidia-smi を [docs/vram-measurements.md](docs/vram-measurements.md) に追記
+- 計測: `PYTHONPATH=src python -m qmc.bench` で各フェーズ（ロード直後 / テキスト生成 / Vision / 生成 / 編集 / unload後）の `memory_allocated` / `memory_reserved` / `max_memory_allocated` / nvidia-smi を [docs/vram-measurements.md](docs/vram-measurements.md) に追記
 
 | GPU | 状態 |
 | --- | --- |
-| A100 | **未計測・未検証** |
-| L4 | **未計測・未検証** |
+| A100 80GB | ✅ 実機検証・計測済み（ピーク約 61 GiB、生成 1024² 40step 16s / 編集 18s）→ [docs/vram-measurements.md](docs/vram-measurements.md) |
+| A100 40GB | 未検証・未計測 |
+| L4 | **未検証・未計測** |
+
+### Colab A100 80GB での実機検証（2026-09-28）
+
+| MVP テスト | 結果 | メモ |
+| --- | --- | --- |
+| 1. 「TerraformとPulumiの違いを教えて」→ Text | ✅ | ストリーミングで日本語回答（Router: Chat） |
+| 2. 画像アップロード＋「何が写っていますか？」→ Vision | ✅ | 27B + mmproj で画面内の要素まで正しく説明 |
+| 3. 「東京の夜景を背景にした未来的なデータセンターを生成して」 | ✅ | 1024², 40 step, 36s（プロンプト最適化・初回ロード込み） |
+| 4. 「もう少し夜を暗くして、ネオンを増やして」→ 直前画像を編集 | ✅ | 18s、rev1 として保存、seed は親と別 |
+| 5. 「元画像と今の画像の違いを説明して」 | ✅ | 元画像と編集後の2枚を Vision に渡し、空の暗さ・ネオン色の違いを説明 |
+| 6. ランタイム完全削除 → 再接続 → 履歴復元 | ✅ | Drive の `history.db` から会話と画像を復元（UI に「履歴を復元しました」）。llama-server も Drive キャッシュから数秒で復元 |
+| 7. GPU 自動判定 | ✅ | `NVIDIA A100-SXM4-80GB (79 GiB) → Performance (profile=a100_80)` |
+
+実機で見つけて修正した問題（PR #14）: torchao が古い（Colab 標準 0.10）、Colab のプロキシ越しに Gradio の API が 503 になる、llama.cpp の 3 アーキ同時ビルドが遅すぎる。
+
+| 生成 | 編集（Chat + Image 同時常駐, 60.9/80 GiB） | ランタイム再作成後の履歴復元 |
+| --- | --- | --- |
+| ![generate](docs/images/ui-a100-generate.jpg) | ![edit](docs/images/ui-a100-edit.jpg) | ![restore](docs/images/ui-a100-restored.jpg) |
 
 ## 13. Troubleshooting
 
 | 症状 | 対処 |
 | --- | --- |
+| 画面は出るが「Connection to the server was lost」 | Colab のポート転送越しに Gradio の API URL がずれるのが原因。`colab.launch()` は `google.colab.kernel.proxyPort()` を `root_path` に渡して解決済み（自前で `demo.launch()` する場合も同様に指定） |
+| `cannot import name 'FqnToConfig' from 'torchao.quantization'` | Colab 標準の torchao 0.10 が古い。`pip install -U "torchao>=0.13"`（`requirements-colab.txt` で指定済み） |
 | `llama-server が見つかりません` | Cell 2 を実行（`colab.install_llama_cpp()`）。ビルド失敗時は `/content/llama.cpp` を削除して再実行 |
 | `Hugging Face からのダウンロードに失敗` | `HF_TOKEN` を Secrets に登録、ディスク空き（約70GB）を確認、再実行（3回リトライ済み） |
 | `QwenImage21Pipeline` が import できない | `requirements-colab.txt` の diffusers（GitHub main 固定）が入っているか確認。PyPI の 0.40.0 には未収録 |
@@ -220,8 +241,9 @@ MyDrive/qwen-multimodal-colab/
 
 ## 15. Limitations
 
-- **実GPU（A100 / L4）での動作は未検証**です。この実装環境では Colab GPU を取得していないため、CPU 上のユニットテスト（115件）と、モックバックエンドでの Gradio E2E（Playwright で MVP シナリオ 1〜5 と履歴復元）のみ確認済みです。モデル ID・API・フラグは一次情報（既存Notebook、HF、llama.cpp / diffusers のソース）で確認しています
-- VRAM の数値は設計見積もりで、実測値は未取得（`python -m qmc.bench` で取得予定）
+- **実機検証は Colab A100 80GB のみ**（2026-09-28）。Gradio UI 上で MVP テスト 1〜5（Chat / Vision / 生成 / 直前画像の編集 / 元画像と現在の比較）と Test 7（A100 → Performance 自動選択）を確認し、`python -m qmc.bench` で VRAM を実測した。**L4 と A100 40GB は未検証**（`l4` / `a100_40` プロファイルは設計値）
+- CPU 上のユニットテスト（117件）とモックバックエンドでの Gradio E2E（Playwright）も通過
+- VRAM の実測値は A100 80GB のみ。A100 40GB / L4 のプロファイル値は設計見積もり
 - Intent Router はルールベースのため誤判定があり得る（手動モードで上書き可能）
 - シングルユーザー前提（GPU処理は1件ずつ直列）
 - Qwen-Image-2.1 は Qwen Research License（非商用研究用途）
@@ -229,7 +251,8 @@ MyDrive/qwen-multimodal-colab/
 
 ## 16. Roadmap
 
-- [ ] Colab A100 / L4 での実機検証と VRAM 実測（`docs/vram-measurements.md`）
+- [x] Colab A100 80GB での実機検証と VRAM 実測（`docs/vram-measurements.md`）
+- [ ] Colab L4 / A100 40GB での実機検証と VRAM 実測
 - [ ] 「元に戻して」「2個前の画像」などの系譜コマンド
 - [ ] バックエンドの外部化: RunPod / Vast.ai / GCP / AWS 上の vLLM（`QMC_CHAT_BASE_URL` で Chat は対応済み）、画像側の HTTP バックエンド
 - [ ] FastAPI バックエンド + 別フロントエンド / PWA（Controller は UI 非依存）
