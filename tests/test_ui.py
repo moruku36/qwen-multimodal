@@ -19,6 +19,36 @@ def test_build_ui(app):
     assert isinstance(build_ui(app), gr.Blocks)
 
 
+def test_composer_first_layout_and_mic_wiring(app):
+    config = build_ui(app).get_config_file()
+    by_name = {c["props"].get("elem_id"): c for c in config["components"]}
+    assert by_name["chat-panel"]["props"]["height"] == "calc(100vh - 210px)"
+    assert by_name["mic-panel"]["props"]["visible"] is False
+    assert by_name["mic-recording"]["props"]["visible"] is False
+    assert by_name["voice-submit"]["props"]["visible"] is False
+    assert by_name["mic-toggle"]["props"]["visible"] is True
+    assert "settings-shell" not in by_name
+    mic_click = next(
+        dep for dep in config["dependencies"] if (by_name["mic-toggle"]["id"], "click") in dep["targets"]
+    )
+    assert by_name["mic-recording"]["id"] in mic_click["outputs"]
+    assert by_name["mic-panel"]["id"] in mic_click["outputs"]
+    voice_click = next(
+        dep for dep in config["dependencies"] if (by_name["voice-submit"]["id"], "click") in dep["targets"]
+    )
+    assert by_name["mic-recording"]["id"] in voice_click["inputs"]
+    accordions = {c["props"].get("label"): c for c in config["components"] if c["type"] == "accordion"}
+    assert {
+        "ツール",
+        "画像の系譜・バリエーション",
+        "マスクで編集",
+        "画像生成・編集の設定",
+        "検索・モード",
+        "システム状態",
+    } <= accordions.keys()
+    assert accordions["マスクで編集"]["props"]["visible"] is False
+
+
 def test_open_policy_label():
     from pathlib import Path
 

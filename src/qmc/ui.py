@@ -26,39 +26,44 @@ INTENT_LABEL = {
     "restore": "Restore",
 }
 STREAM_INTERVAL_S = 0.05
-UI_THEME = gr.themes.Base(primary_hue="fuchsia", neutral_hue="slate").set(
-    body_background_fill="#101012",
-    body_background_fill_dark="#101012",
+UI_THEME = gr.themes.Base(primary_hue="slate", neutral_hue="slate").set(
+    body_background_fill="#0b0b0c",
+    body_background_fill_dark="#0b0b0c",
     body_text_color="#f4f4f5",
     body_text_color_dark="#f4f4f5",
-    background_fill_primary="#18181b",
-    background_fill_primary_dark="#18181b",
-    background_fill_secondary="#222226",
-    background_fill_secondary_dark="#222226",
-    block_background_fill="#18181b",
-    block_background_fill_dark="#18181b",
-    button_primary_background_fill="#453449",
-    button_primary_background_fill_dark="#453449",
-    button_primary_background_fill_hover="#604364",
-    button_primary_background_fill_hover_dark="#604364",
+    background_fill_primary="#141416",
+    background_fill_primary_dark="#141416",
+    background_fill_secondary="#1c1c1f",
+    background_fill_secondary_dark="#1c1c1f",
+    block_background_fill="#141416",
+    block_background_fill_dark="#141416",
+    button_primary_background_fill="#27272a",
+    button_primary_background_fill_dark="#27272a",
+    button_primary_background_fill_hover="#353539",
+    button_primary_background_fill_hover_dark="#353539",
     button_primary_text_color="#ffffff",
     button_primary_text_color_dark="#ffffff",
-    input_background_fill="#222226",
-    input_background_fill_dark="#222226",
+    input_background_fill="#1c1c1f",
+    input_background_fill_dark="#1c1c1f",
 )
 
 CSS = """
-#conversation-shell, #settings-shell {max-width: 940px; margin: 0 auto; padding: 0 12px 20px}
-#chat-panel {border: 0 !important; box-shadow: none !important; background: transparent !important}
-#chat-panel .placeholder {font-size: 1.55rem; font-weight: 600; color: var(--body-text-color)}
-#composer {border-radius: 22px !important; overflow: hidden; border: 1px solid var(--border-color-primary) !important}
-#session-list {min-height: 335px; max-height: 42vh; overflow-y: auto; padding: 4px 2px}
+#conversation-shell {max-width: 800px; min-height: calc(100vh - 24px); margin: 0 auto; padding: 8px 12px 16px; display: flex; flex-direction: column}
+#chat-panel {flex: 1 1 auto; min-height: 60vh; border: 0 !important; box-shadow: none !important; background: transparent !important}
+#chat-panel .placeholder {font-size: 1.15rem; font-weight: 500; color: var(--body-text-color-subdued)}
+#chat-panel .message.user {background: #242427 !important}
+#chat-panel .message.bot {background: #141416 !important}
+#composer {border-radius: 18px !important; overflow: hidden; border: 1px solid #343437 !important}
+#session-list {min-height: 220px; max-height: 42vh; overflow-y: auto; padding: 4px 2px}
 #session-list label {height: 43px; max-height: 43px; padding: 9px 10px; border-radius: 10px; cursor: pointer; overflow: hidden; white-space: nowrap; text-overflow: ellipsis}
-#voice-submit {min-height: 56px !important; font-size: 1rem !important; font-weight: 650 !important}
-#tts-switch {min-height: 44px; display: flex; align-items: center}
-#voice-submit button {min-height: 56px !important}
+#composer-actions {align-items: center; gap: 2px; padding: 2px 4px 0}
+#composer-actions button {min-height: 34px !important; border: 0 !important; background: transparent !important; box-shadow: none !important}
+#composer-actions button:hover {background: #242427 !important}
+#mic-toggle {width: 38px !important; min-width: 38px !important}
+#mic-panel {padding: 8px 0}
 #status-panel {font-size: 0.82em}
-#route-info {min-height: 1.5em; font-size: 0.85em; opacity: 0.8}
+#route-info {min-height: 0; font-size: 0.78em; opacity: 0.6; margin: 0}
+#route-info:empty {display: none}
 footer {display: none !important}
 """
 
@@ -353,7 +358,32 @@ def build_ui(app: App) -> gr.Blocks:
     def refresh_lineage(session_id):
         view = lineage_view(app, session_id)
         selected = app.sessions.get_image(view[2]) if view[2] else None
-        return (*view, gr.update(value=str(app.sessions.image_path(selected)) if selected else None))
+        return (
+            *view,
+            gr.update(visible=selected is not None),
+            gr.update(value=str(app.sessions.image_path(selected)) if selected else None),
+        )
+
+    def on_mic_toggle(opened):
+        show = not bool(opened)
+        return (
+            show,
+            gr.update(visible=show),
+            gr.update(visible=show, value=None),
+            gr.update(visible=show),
+            gr.update(value="✕" if show else "🎤"),
+            gr.update(height="calc(100vh - 350px)" if show else "calc(100vh - 210px)"),
+        )
+
+    def close_mic():
+        return (
+            False,
+            gr.update(visible=False),
+            gr.update(visible=False, value=None),
+            gr.update(visible=False),
+            gr.update(value="🎤"),
+            gr.update(height="calc(100vh - 210px)"),
+        )
 
     def on_gallery_select(session_id, ids, evt: gr.SelectData):
         if not ids or evt.index is None:
@@ -421,10 +451,11 @@ def build_ui(app: App) -> gr.Blocks:
         initial_gallery = lineage_view(app, session_state.value)
         selected_state = gr.State(initial_gallery[2])
         gallery_ids = gr.State(initial_gallery[1])
+        mic_open = gr.State(False)
 
-        with gr.Sidebar(open=True, width=300):
-            gr.Markdown("### Qwen Studio")
-            new_btn = gr.Button("＋ 新しいチャット", variant="primary", size="lg")
+        with gr.Sidebar(open=True, width=260):
+            gr.Markdown("**Qwen Studio**")
+            new_btn = gr.Button("＋ 新しいチャット", variant="secondary", size="sm")
             sessions_radio = gr.Radio(
                 choices=first,
                 value=first[0][1] if first else None,
@@ -433,20 +464,58 @@ def build_ui(app: App) -> gr.Blocks:
                 elem_id="session-list",
             )
             delete_btn = gr.Button("このチャットを削除", size="sm")
-            with gr.Accordion("画像の系譜・バリエーション", open=False):
-                lineage_gallery = gr.Gallery(
-                    value=initial_gallery[0], columns=4, height=135, show_label=False, preview=False
-                )
-                selected_caption = gr.Markdown(initial_gallery[3])
-                with gr.Row():
-                    previous_btn = gr.Button("1個前", size="sm")
-                    two_back_btn = gr.Button("2個前", size="sm")
-                    restore_btn = gr.Button("元に戻す", size="sm")
-            with gr.Accordion("システム状態", open=False):
-                status_md = gr.Markdown(status_markdown(app), elem_id="status-panel")
-                with gr.Row():
-                    refresh_btn = gr.Button("状態更新", size="sm")
-                    unload_btn = gr.Button("モデル解放", size="sm")
+            with gr.Accordion("ツール", open=False):
+                with gr.Accordion("画像の系譜・バリエーション", open=False):
+                    lineage_gallery = gr.Gallery(
+                        value=initial_gallery[0], columns=4, height=135, show_label=False, preview=False
+                    )
+                    selected_caption = gr.Markdown(initial_gallery[3])
+                    with gr.Row():
+                        previous_btn = gr.Button("1個前", size="sm")
+                        two_back_btn = gr.Button("2個前", size="sm")
+                        restore_btn = gr.Button("元に戻す", size="sm")
+                with gr.Accordion(
+                    "マスクで編集", open=False, visible=bool(initial_gallery[2])
+                ) as mask_accordion:
+                    mask_enabled = gr.Checkbox(label="マスクを使う", value=False)
+                    mask_editor = gr.ImageEditor(
+                        value=str(app.sessions.image_path(app.sessions.get_image(initial_gallery[2])))
+                        if initial_gallery[2]
+                        else None,
+                        type="pil",
+                        label="編集する部分を塗る",
+                    )
+                with gr.Accordion("画像生成・編集の設定", open=False):
+                    with gr.Row():
+                        aspect = gr.Dropdown(list(ASPECT_RATIOS), value="1:1", label="アスペクト比")
+                        band = gr.Dropdown(bands, value=default_band, label="解像度帯")
+                    steps = gr.Slider(1, 60, value=profile.image_default_steps, step=1, label="Steps")
+                    seed = gr.Number(value=-1, precision=0, label="Seed（-1でランダム）")
+                    rewrite = gr.Radio(
+                        [("自動", "auto"), ("LLMで最適化", "on"), ("そのまま", "off")],
+                        value=app.cfg.prompt_rewrite,
+                        label="画像プロンプト",
+                    )
+                    variations = gr.Radio(
+                        [(str(n), n) for n in (1, 4)], value=1, label="バリエーション（生成のみ）"
+                    )
+                with gr.Accordion("検索・モード", open=False):
+                    mode = gr.Radio(MODE_CHOICES, value=Mode.AUTO.value, label="モード")
+                    web_search = gr.Radio(
+                        [("自動", "auto"), ("常に", "on"), ("オフ", "off")],
+                        value=app.cfg.web_search,
+                        label="Web検索",
+                    )
+                    content_policy = gr.Radio(
+                        [("開放", "open"), ("標準", "standard")],
+                        value=app.cfg.content_policy,
+                        label="コンテンツ方針",
+                    )
+                with gr.Accordion("システム状態", open=False):
+                    status_md = gr.Markdown(status_markdown(app), elem_id="status-panel")
+                    with gr.Row():
+                        refresh_btn = gr.Button("状態更新", size="sm")
+                        unload_btn = gr.Button("モデル解放", size="sm")
             timer = gr.Timer(5.0)
 
         if app.cfg.share:
@@ -454,78 +523,54 @@ def build_ui(app: App) -> gr.Blocks:
         with gr.Column(elem_id="conversation-shell"):
             chatbot = gr.Chatbot(
                 value=render_history(app, session_state.value),
-                height="52vh",
+                height="calc(100vh - 210px)",
                 show_label=False,
                 buttons=["copy"],
                 placeholder="今日は何を話しましょう？",
                 allow_file_downloads=True,
                 elem_id="chat-panel",
             )
-            route_md = gr.Markdown("", elem_id="route-info")
             textbox = gr.MultimodalTextbox(
-                placeholder="メッセージを入力、または＋から画像・PDF・動画を添付",
+                placeholder="メッセージを送信",
                 file_types=["image", ".pdf", ".wav", ".mp3", ".m4a", ".webm", ".ogg", ".mp4", ".mov", ".mkv"],
                 file_count="multiple",
-                lines=2,
+                lines=1,
                 max_lines=8,
                 show_label=False,
                 submit_btn=True,
                 autofocus=True,
                 elem_id="composer",
             )
-            with gr.Row(equal_height=True):
+            with gr.Row(elem_id="composer-actions"):
+                mic_toggle = gr.Button("🎤", size="sm", scale=0, min_width=38, elem_id="mic-toggle")
+                thinking = gr.Checkbox(
+                    value=app.cfg.thinking_default, label="🧠 思考", scale=0, min_width=90, container=False
+                )
+                read_aloud = gr.Checkbox(
+                    value=app.cfg.tts,
+                    label="🔊 読み上げ",
+                    scale=0,
+                    min_width=110,
+                    container=False,
+                    elem_id="tts-switch",
+                )
+                stop_btn = gr.Button("⏹ 停止", size="sm", scale=0, min_width=72)
+                regen_btn = gr.Button("🔄 再生成", size="sm", scale=0, min_width=80)
+                clear_btn = gr.Button("🧹 クリア", size="sm", scale=0, min_width=84)
+            with gr.Row(elem_id="mic-panel", visible=False) as mic_panel:
                 audio_input = gr.Audio(
-                    sources=["microphone", "upload"], type="filepath", label="マイク・音声ファイル", scale=4
+                    sources=["microphone"],
+                    type="filepath",
+                    label="録音",
+                    scale=4,
+                    visible=False,
+                    elem_id="mic-recording",
                 )
                 mic_submit_btn = gr.Button(
-                    "🎙 音声を送信", size="lg", scale=2, min_width=170, elem_id="voice-submit"
+                    "送信", size="sm", scale=1, min_width=64, visible=False, elem_id="voice-submit"
                 )
             speech_output = gr.Audio(label="回答の読み上げ", autoplay=True, interactive=False, visible=False)
-            with gr.Row():
-                thinking = gr.Checkbox(value=app.cfg.thinking_default, label="深く考える", scale=1)
-                read_aloud = gr.Checkbox(
-                    value=app.cfg.tts, label="🔊 回答を読み上げる", scale=1, elem_id="tts-switch"
-                )
-            with gr.Row():
-                stop_btn = gr.Button("停止", size="sm")
-                regen_btn = gr.Button("再生成", size="sm")
-                clear_btn = gr.Button("会話をクリア", size="sm")
-        with gr.Column(elem_id="settings-shell"):
-            with gr.Accordion("詳細設定", open=False):
-                mode = gr.Radio(MODE_CHOICES, value=Mode.AUTO.value, label="モード")
-                web_search = gr.Radio(
-                    [("自動", "auto"), ("常に", "on"), ("オフ", "off")],
-                    value=app.cfg.web_search,
-                    label="🌐 Web検索（最新情報）",
-                )
-                content_policy = gr.Radio(
-                    [("開放", "open"), ("標準", "standard")],
-                    value=app.cfg.content_policy,
-                    label="コンテンツ方針",
-                )
-            with gr.Accordion("画像生成・編集の設定", open=False):
-                with gr.Row():
-                    aspect = gr.Dropdown(list(ASPECT_RATIOS), value="1:1", label="アスペクト比（生成時）")
-                    band = gr.Dropdown(bands, value=default_band, label="解像度帯（長辺の目安）")
-                    steps = gr.Slider(1, 60, value=profile.image_default_steps, step=1, label="Steps")
-                    seed = gr.Number(value=-1, precision=0, label="Seed（-1でランダム）")
-                rewrite = gr.Radio(
-                    [("自動", "auto"), ("常にLLMで最適化", "on"), ("そのまま使う", "off")],
-                    value=app.cfg.prompt_rewrite,
-                    label="画像プロンプトの最適化（Chatモデルで英語プロンプト化）",
-                )
-                variations = gr.Radio(
-                    [(str(n), n) for n in (1, 4)], value=1, label="バリエーション（画像生成のみ）"
-                )
-            with gr.Accordion("マスクで編集", open=False):
-                mask_enabled = gr.Checkbox(label="マスクを使う", value=False)
-                mask_editor = gr.ImageEditor(
-                    value=str(app.sessions.image_path(app.sessions.get_image(initial_gallery[2])))
-                    if initial_gallery[2]
-                    else None,
-                    type="pil",
-                    label="編集する部分を塗る",
-                )
+            route_md = gr.Markdown("", elem_id="route-info")
 
         settings = [
             mode,
@@ -568,6 +613,10 @@ def build_ui(app: App) -> gr.Blocks:
         mic_event = mic_submit_btn.click(
             on_submit, submit_inputs, submit_outputs, concurrency_id="gpu", concurrency_limit=1
         )
+        mic_outputs = [mic_open, mic_panel, audio_input, mic_submit_btn, mic_toggle, chatbot]
+        mic_toggle.click(on_mic_toggle, mic_open, mic_outputs, queue=False)
+        submit_event.then(close_mic, None, mic_outputs)
+        mic_event.then(close_mic, None, mic_outputs)
         regen_event = regen_btn.click(
             on_regenerate,
             [session_state, selected_state, *settings, read_aloud],
@@ -575,7 +624,14 @@ def build_ui(app: App) -> gr.Blocks:
             concurrency_id="gpu",
             concurrency_limit=1,
         )
-        lineage_outputs = [lineage_gallery, gallery_ids, selected_state, selected_caption, mask_editor]
+        lineage_outputs = [
+            lineage_gallery,
+            gallery_ids,
+            selected_state,
+            selected_caption,
+            mask_accordion,
+            mask_editor,
+        ]
         submit_event.then(refresh_lineage, session_state, lineage_outputs)
         mic_event.then(refresh_lineage, session_state, lineage_outputs)
         regen_event.then(refresh_lineage, session_state, lineage_outputs)
@@ -601,18 +657,18 @@ def build_ui(app: App) -> gr.Blocks:
         )
         restore_event.then(refresh_lineage, session_state, lineage_outputs)
         stop_btn.click(on_stop, None, route_md, queue=False)
-        clear_btn.click(on_clear, session_state, [chatbot, route_md]).then(
-            refresh_lineage, session_state, lineage_outputs
-        )
-        new_btn.click(on_new, None, [session_state, chatbot, sessions_radio, route_md]).then(
-            refresh_lineage, session_state, lineage_outputs
-        )
-        sessions_radio.input(on_select, sessions_radio, [session_state, chatbot, route_md]).then(
-            refresh_lineage, session_state, lineage_outputs
-        )
-        delete_btn.click(on_delete, session_state, [session_state, chatbot, sessions_radio]).then(
-            refresh_lineage, session_state, lineage_outputs
-        )
+        clear_event = clear_btn.click(on_clear, session_state, [chatbot, route_md])
+        clear_event.then(refresh_lineage, session_state, lineage_outputs)
+        clear_event.then(close_mic, None, mic_outputs)
+        new_event = new_btn.click(on_new, None, [session_state, chatbot, sessions_radio, route_md])
+        new_event.then(refresh_lineage, session_state, lineage_outputs)
+        new_event.then(close_mic, None, mic_outputs)
+        select_event = sessions_radio.input(on_select, sessions_radio, [session_state, chatbot, route_md])
+        select_event.then(refresh_lineage, session_state, lineage_outputs)
+        select_event.then(close_mic, None, mic_outputs)
+        delete_event = delete_btn.click(on_delete, session_state, [session_state, chatbot, sessions_radio])
+        delete_event.then(refresh_lineage, session_state, lineage_outputs)
+        delete_event.then(close_mic, None, mic_outputs)
         refresh_btn.click(
             lambda p, selected, n: status_markdown(app, p, selected, n),
             [content_policy, selected_state, variations],
