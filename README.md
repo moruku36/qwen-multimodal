@@ -138,7 +138,11 @@ python -m qmc --share         # 公開URL（Security 参照）
 | `QMC_PROMPT_REWRITE` | `auto` / `on` / `off` |
 | `TAVILY_API_KEY` / `BRAVE_API_KEY` | Web検索プロバイダのAPIキー（任意。無ければ DuckDuckGo） |
 | `QMC_WEB_SEARCH` | Web検索の既定値 `auto` / `on` / `off` |
+| `QMC_CONTENT_POLICY` | `open`（既定）/ `standard`。画面から各ターンで切替可能 |
+| `QMC_SEARCH_SAFESEARCH` | `auto`（open は off、standard は moderate）/ `off` / `moderate` / `strict` |
 | `QMC_SEARCH_PROVIDER` | `auto` / `tavily` / `brave` / `duckduckgo` |
+| `QMC_CHAT_HF_REPO` / `QMC_CHAT_MODEL_FILE` | Chat 用 GGUF リポジトリとファイル。既定は公式 Qwen3.8-27B Instruct |
+| `QMC_CHAT_REMOTE_MODEL_NAME` | 外部 Chat サーバーに送るモデル名 |
 | `QMC_MOCK=1` | CPU モック |
 
 ## 7. Google Drive 履歴保存
@@ -191,9 +195,11 @@ MyDrive/qwen-multimodal-colab/
 
 モデルの学習データには期限があるため、最新情報が必要な質問は Web 検索して出典付きで答えます。
 
-- 画面の **🌐 Web検索**: `自動`（既定。「最新」「今日」「ニュース」「株価」「天気」「2026年」「調べて」などを含む質問だけ検索）/ `常に` / `オフ`
+- 画面の **🌐 Web検索**: `自動`（既定。「最新」「今日」「ニュース」「株価」「天気」「調べて」「おすすめ」「根拠」などで検索）/ `常に` / `オフ`
+- **コンテンツ方針**: `開放` は合法な成人向け・センシティブな話題を検索・回答し、safesearch を既定で off にします。`標準` は safesearch が既定で moderate です。未成年者の性的内容はどちらでも扱いません
 - 流れ: Chat モデルが検索クエリを作成 → 検索（上位5件）→ 上位3ページの本文を取得 → 番号付きの参考データとしてシステムプロンプトに入れて回答 → 末尾に **🔎 参考（Web検索）** のリンク一覧
-- 検索プロバイダ（自動選択）: `TAVILY_API_KEY` があれば **Tavily**、`BRAVE_API_KEY` があれば **Brave Search**、どちらも無ければ **DuckDuckGo（`ddgs`、キー不要）**
+- 検索プロバイダ（自動選択）: `開放` は **Brave → DuckDuckGo → Tavily**、`標準` は **Tavily → Brave → DuckDuckGo**。Tavily の Acceptable Use Policy は性的に露骨なクエリを禁じています。明示的に Tavily を選んだ場合は警告が表示されます
+- 公式 Instruct モデルは方針を伝えても一部の回答を拒否することがあります。より柔軟な応答が必要なら `QMC_CHAT_HF_REPO` と `QMC_CHAT_MODEL_FILE` で、同じサイズの別の Qwen3.8-27B GGUF を指定できます。マルチモーダル機能には既存の mmproj と互換性を確認してください
 - 検索しないときも、システムプロンプトに**現在日時（JST）**を入れ、「学習データ以降は知らない」ことをモデルに伝えています
 - 検索結果は「データ」として扱い、ページ内の指示には従わないようにプロンプトで明示しています（プロンプトインジェクション対策）
 
@@ -253,6 +259,7 @@ MyDrive/qwen-multimodal-colab/
 - `.gitignore` でモデル・生成画像・DB・`.env`・認証情報ファイルを除外
 - UI の設定表示・ログにはパスワード / APIキーを出しません（`AppConfig.public_dict()`）
 - Web検索を使うと、**検索クエリが外部の検索サービス**（Tavily / Brave / DuckDuckGo 等）に送信され、参考ページにもアクセスします。送りたくない会話では 🌐 Web検索 を `オフ` にしてください
+- `開放` モードでは元の話題を保った検索クエリがプロバイダに送信されます。Tavily は性的に露骨な利用を AUP で禁じています。`share=True` で開放モードを公開する場合のアクセス管理と利用内容は利用者が管理してください。未成年者の性的内容を拒否する制限は常に有効です
 
 ## 15. Limitations
 

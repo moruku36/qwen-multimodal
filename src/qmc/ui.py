@@ -12,6 +12,7 @@ from .controller import Event, TurnOptions
 from .gpu_manager import memory_snapshot
 from .image_engine import ASPECT_RATIOS, BANDS, ImageOptions
 from .router import Mode
+from .search_engine import resolve_safesearch
 from .session_manager import MessageRecord
 
 MODE_CHOICES = [("Auto", Mode.AUTO.value), ("Chat", Mode.CHAT.value), ("Vision", Mode.VISION.value),
@@ -87,7 +88,8 @@ def session_choices(app: App) -> list[tuple[str, str]]:
     return [(s["title"] or "(無題)", s["id"]) for s in app.sessions.list_sessions()]
 
 
-def status_markdown(app: App) -> str:
+def status_markdown(app: App, content_policy: str | None = None) -> str:
+    policy = content_policy or app.cfg.content_policy
     snap = memory_snapshot()
     status = app.manager.status()
     loaded = ", ".join(status["loaded"]) or "なし"
@@ -99,19 +101,24 @@ def status_markdown(app: App) -> str:
         f"**Chat**: {app.chat_label}",
         f"**Image**: {app.image_label}",
         f"**Web検索**: {app.search_label}",
+        f"**コンテンツ方針**: {policy} / safesearch={resolve_safesearch(app.cfg.search_safesearch, policy)}",
         f"**履歴**: {'Google Drive' if app.cfg.drive_mounted else '⚠️ ローカル（ランタイム終了で消えます）'}",
     ]
     lines += [f"ℹ️ {n}" for n in app.store.notes[-3:]]
+    if policy == "open" and app.search_label == "tavily":
+        lines.append("⚠️ Tavily は成人向け検索を規約で禁じています。Brave / DDG を推奨")
     return "  \n".join(lines)
 
 
-def _options(mode, thinking, aspect, band, steps, seed, rewrite, web_search="auto") -> TurnOptions:
+def _options(mode, thinking, aspect, band, steps, seed, rewrite, web_search="auto",
+             content_policy="open") -> TurnOptions:
     seed_val = None if seed is None or int(seed) < 0 else int(seed)
     return TurnOptions(
         mode=mode or Mode.AUTO.value,
         thinking=bool(thinking),
         prompt_rewrite=rewrite or "auto",
         web_search=web_search or "auto",
+        content_policy=content_policy or "open",
         image=ImageOptions(aspect=aspect or "1:1", band=int(band) if band else None,
                            steps=int(steps) if steps else None, seed=seed_val),
     )  # fmt: skip
@@ -158,11 +165,12 @@ def build_ui(app: App) -> gr.Blocks:
             return session_id
         return app.sessions.create_session()
 
-    def on_submit(msg, session_id, mode, thinking, web_search, aspect, band, steps, seed, rewrite):
+    def on_submit(msg, session_id, mode, thinking, web_search, content_policy,
+                  aspect, band, steps, seed, rewrite):
         msg = msg or {}
         text, files = msg.get("text", ""), msg.get("files", [])
         session_id = ensure_session(session_id)
-        opts = _options(mode, thinking, aspect, band, steps, seed, rewrite, web_search)
+        opts = _options(mode, thinking, aspect, band, steps, seed, rewrite, web_search, content_policy)
         events = app.controller.handle(session_id, text, [_file_path(f) for f in files], opts)
         for chat, route_md in stream_turn(session_id, events):
             yield chat, gr.update(value=None), route_md, session_id, gr.update()
@@ -174,11 +182,12 @@ def build_ui(app: App) -> gr.Blocks:
             gr.update(choices=session_choices(app), value=session_id),
         )
 
-    def on_regenerate(session_id, mode, thinking, web_search, aspect, band, steps, seed, rewrite):
+    def on_regenerate(session_id, mode, thinking, web_search, content_policy,
+                      aspect, band, steps, seed, rewrite):
         if not session_id:
             yield gr.update(), "再生成できるメッセージがありません"
             return
-        opts = _options(mode, thinking, aspect, band, steps, seed, rewrite, web_search)
+        opts = _options(mode, thinking, aspect, band, steps, seed, rewrite, web_search, content_policy)
         yield from stream_turn(session_id, app.controller.regenerate(session_id, opts))
 
     def on_stop():
@@ -206,9 +215,9 @@ def build_ui(app: App) -> gr.Blocks:
         sid = choices[0][1] if choices else None
         return sid, render_history(app, sid), gr.update(choices=choices, value=sid)
 
-    def on_unload():
+    def on_unload(content_policy):
         app.manager.unload_all()
-        return status_markdown(app)
+        return status_markdown(app, content_policy)
 
     with gr.Blocks(title="Qwen Multimodal Chat") as demo:
         first = session_choices(app)
@@ -256,6 +265,10 @@ def build_ui(app: App) -> gr.Blocks:
                 label="🌐 Web検索（最新情報）",
                 scale=2,
             )
+            content_policy = gr.Radio(
+                [("開放 (成人向け検索OK)", "open"), ("標準", "standard")],
+                value=app.cfg.content_policy, label="コンテンツ方針", scale=2,
+            )
         with gr.Row():
             stop_btn = gr.Button("⏹ Stop", size="sm")
             regen_btn = gr.Button("🔄 Regenerate", size="sm")
@@ -272,7 +285,7 @@ def build_ui(app: App) -> gr.Blocks:
                 label="画像プロンプトの最適化（Chatモデルで英語プロンプト化）",
             )
 
-        settings = [mode, thinking, web_search, aspect, band, steps, seed, rewrite]
+        settings = [mode, thinking, web_search, content_policy, aspect, band, steps, seed, rewrite]
         textbox.submit(
             on_submit,
             [textbox, session_state, *settings],
@@ -292,17 +305,18 @@ def build_ui(app: App) -> gr.Blocks:
         new_btn.click(on_new, None, [session_state, chatbot, sessions_radio, route_md])
         sessions_radio.input(on_select, sessions_radio, [session_state, chatbot, route_md])
         delete_btn.click(on_delete, session_state, [session_state, chatbot, sessions_radio])
-        refresh_btn.click(lambda: status_markdown(app), None, status_md)
-        unload_btn.click(on_unload, None, status_md, concurrency_id="gpu", concurrency_limit=1)
-        timer.tick(lambda: status_markdown(app), None, status_md, show_progress="hidden")
+        refresh_btn.click(lambda p: status_markdown(app, p), content_policy, status_md)
+        content_policy.change(lambda p: status_markdown(app, p), content_policy, status_md)
+        unload_btn.click(on_unload, content_policy, status_md, concurrency_id="gpu", concurrency_limit=1)
+        timer.tick(lambda p: status_markdown(app, p), content_policy, status_md, show_progress="hidden")
 
-        def on_load():
+        def on_load(content_policy):
             # re-read on every page load: the list built at startup is stale after new chats
             choices = session_choices(app)
             sid = choices[0][1] if choices else None
-            return sid, render_history(app, sid), gr.update(choices=choices, value=sid), status_markdown(app)
+            return sid, render_history(app, sid), gr.update(choices=choices, value=sid), status_markdown(app, content_policy)
 
-        demo.load(on_load, None, [session_state, chatbot, sessions_radio, status_md])
+        demo.load(on_load, content_policy, [session_state, chatbot, sessions_radio, status_md])
     return demo
 
 
