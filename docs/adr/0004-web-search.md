@@ -22,4 +22,6 @@ Qwen3.8-27B の知識は学習データの期限まで（ユーザー報告で�
 
 ## Amendment: 2026-09-28
 
+製品のWeb検索の初期値は「常に」に変更。UIの「自動」は引き続き選択可能。
+
 ADR-0005 により、safesearch と自動選択順はコンテンツ方針に依存する。開放では Brave → DuckDuckGo → Tavily、標準では従来の Tavily → Brave → DuckDuckGo。

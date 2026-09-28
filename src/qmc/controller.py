@@ -48,7 +48,7 @@ class TurnOptions:
     thinking: bool = False
     image: ImageOptions = field(default_factory=ImageOptions)
     prompt_rewrite: str = "auto"  # auto | on | off
-    web_search: str = "auto"  # auto | on | off
+    web_search: str = "on"  # auto | on | off
     content_policy: str | None = None  # None -> application default
 
 

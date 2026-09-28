@@ -105,10 +105,10 @@ class LlamaServerModel:
     """ManagedModel + ChatBackend for a local llama-server process."""
 
     name = "chat"
-    label = "Qwen3.8-27B (llama.cpp GGUF Q4_K_M + mmproj)"
 
     def __init__(self, cfg: AppConfig, profile: GPUProfile):
         self.cfg = cfg
+        self.label = f"{cfg.chat.hf_repo}/{cfg.chat.model_file} + mmproj ({cfg.chat.mmproj_repo or cfg.chat.hf_repo})"
         self.profile = profile
         self.ctx_size = cfg.chat.ctx_size or profile.chat_ctx_size
         self.fit_target = cfg.chat.fit_target_mib or profile.chat_fit_target_mib
@@ -136,9 +136,8 @@ class LlamaServerModel:
         if self._paths is None:
             c = self.cfg.chat
             model = download_hf_file(c.hf_repo, c.model_file, self.cfg.hf_cache_dir)
-            mmproj = (
-                download_hf_file(c.hf_repo, c.mmproj_file, self.cfg.hf_cache_dir) if c.mmproj_file else None
-            )
+            mmproj_repo = c.mmproj_repo or c.hf_repo
+            mmproj = download_hf_file(mmproj_repo, c.mmproj_file, self.cfg.hf_cache_dir) if c.mmproj_file else None
             self._paths = (model, mmproj)
         return self._paths
 

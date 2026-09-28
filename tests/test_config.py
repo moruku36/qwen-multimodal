@@ -14,6 +14,7 @@ def test_env_overrides(monkeypatch, tmp_path):
     monkeypatch.setenv("QMC_CONTENT_POLICY", "standard")
     monkeypatch.setenv("QMC_SEARCH_SAFESEARCH", "off")
     monkeypatch.setenv("QMC_CHAT_HF_REPO", "owner/custom-gguf")
+    monkeypatch.setenv("QMC_CHAT_MMPROJ_REPO", "owner/custom-mmproj")
     monkeypatch.setenv("QMC_CHAT_REMOTE_MODEL_NAME", "custom-model")
     cfg = load_config()
     assert cfg.data_dir == tmp_path
@@ -24,6 +25,7 @@ def test_env_overrides(monkeypatch, tmp_path):
     assert cfg.content_policy == "standard"
     assert cfg.search_safesearch == "off"
     assert cfg.chat.hf_repo == "owner/custom-gguf"
+    assert cfg.chat.mmproj_repo == "owner/custom-mmproj"
     assert cfg.chat.remote_model_name == "custom-model"
 
 
@@ -31,6 +33,16 @@ def test_paths(tmp_path):
     cfg = load_config(data_dir=tmp_path)
     assert cfg.image_dir("abc") == tmp_path / "sessions" / "abc" / "images"
     assert cfg.db_mirror_path == tmp_path / "history.db"
+
+
+def test_model_and_search_defaults(monkeypatch):
+    for name in ("QMC_WEB_SEARCH", "QMC_CHAT_HF_REPO", "QMC_CHAT_MODEL_FILE", "QMC_CHAT_MMPROJ_REPO"):
+        monkeypatch.delenv(name, raising=False)
+    cfg = load_config()
+    assert cfg.web_search == "on"
+    assert cfg.chat.hf_repo == "huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF"
+    assert cfg.chat.model_file == "Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf"
+    assert cfg.chat.mmproj_repo == "ggml-org/Qwen3.8-27B-GGUF"
 
 
 def test_public_dict_hides_secrets(monkeypatch):

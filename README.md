@@ -13,7 +13,7 @@ Google Colab の GPU をバックエンドにして、ブラウザから ChatGPT
 
 - **Chat**: Qwen3.8-27B と日本語で会話（Thinking の ON/OFF 切替可、思考過程は折りたたみ表示）
 - **Vision**: 画像をアップロードして質問。生成画像・編集画像についても質問できる
-- **Web検索**: 「最新の〜」「今日の〜」などは自動でWeb検索し、出典付きで回答（学習データの期限を補う）
+- **Web検索**: 既定では毎ターンWeb検索し、出典付きで回答（学習データの期限を補う）
 - **Image Generation**: 「〜を描いて」「〜を生成して」で Qwen-Image-2.1 が画像生成
 - **Image Editing**: 画像を添付して「背景を東京の夜景に変更して」、生成直後に「もう少し明るく」などの追加指示
 - **比較**: 「元画像と今の画像の違いを説明して」→ 元画像と最新画像を両方 Vision に渡して説明
@@ -63,10 +63,10 @@ flowchart TD
 
 | 用途 | モデル | 実行方法 | 量子化 | ライセンス |
 | --- | --- | --- | --- | --- |
-| Text / Vision / Reasoning | [`ggml-org/Qwen3.8-27B-GGUF`](https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF) `Qwen3.8-27B-Q4_K_M.gguf` + `mmproj-Qwen3.8-27B-Q8_0.gguf` | llama.cpp `llama-server`（commit `4da6337` を固定ビルド） | GGUF Q4_K_M | Apache-2.0 |
+| Text / Vision / Reasoning | [`huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF) `Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf` + [公式 mmproj](https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF) `mmproj-Qwen3.8-27B-Q8_0.gguf` | llama.cpp `llama-server`（commit `4da6337` を固定ビルド） | GGUF Q4_K_M | Apache-2.0 |
 | Image Generation / Editing | [`Qwen/Qwen-Image-2.1`](https://huggingface.co/Qwen/Qwen-Image-2.1) | diffusers `QwenImage21Pipeline`（main `e0abab8` 固定） | A100: bf16 / L4: DiT int8 (torchao) | Qwen Research License（非商用研究用途） |
 
-**なぜ2モデル？** Qwen3.8-27B は画像・動画入力に対応したネイティブVLMで、GGUF に `mmproj` が同梱されています。Vision 専用モデルを常駐させる必要がないため、VRAMを節約できる2モデル構成にしました。
+**なぜ2モデル？** Qwen3.8-27B は画像・動画入力に対応したネイティブVLMです。Chat GGUF と公式 `mmproj` は別リポジトリから取得します。Vision 専用モデルを常駐させる必要がないため、VRAMを節約できる2モデル構成にしました。
 `11_qwen3_vl_image_judge.ipynb` は Google Drive 上で見つからず、内容を比較できていません（見つかれば `ChatBackend` を追加して3モデル構成にも拡張できます）。
 
 ## 4. A100 / L4 の違い
@@ -84,7 +84,7 @@ flowchart TD
 | 既定ステップ数 / 最大解像度帯 | 40 / 2048 | 40 / 2048 | 28 / 1280 |
 | VAE タイリング | なし | なし | 2048帯以上 |
 
-判断根拠（計測前の設計値）: 27B Q4_K_M ≈ 19GB + KV、Qwen-Image のテキストエンコーダ（Qwen3-VL 8B, bf16）≈ 16–17GB、DiT 7B（bf16 ≈ 14GB / int8 ≈ 7GB）。
+判断根拠（計測前の設計値）: 27B Q4_K_M ≈ 17GB + KV、Qwen-Image のテキストエンコーダ（Qwen3-VL 8B, bf16）≈ 16–17GB、DiT 7B（bf16 ≈ 14GB / int8 ≈ 7GB）。
 そのため 40GB 以下では同時常駐させず、`ModelManager` が必要なときだけ切り替えます（同じモデルの無駄な再ロードはしません）。
 **L4 では Chat ↔ Image の切り替えごとに数十秒〜1分程度の待ち**が発生します。
 
@@ -137,11 +137,14 @@ python -m qmc --share         # 公開URL（Security 参照）
 | `QMC_CHAT_BASE_URL` / `QMC_CHAT_API_KEY` | 外部の OpenAI 互換サーバー（vLLM on RunPod 等）を Chat に使う |
 | `QMC_PROMPT_REWRITE` | `auto` / `on` / `off` |
 | `TAVILY_API_KEY` / `BRAVE_API_KEY` | Web検索プロバイダのAPIキー（任意。無ければ DuckDuckGo） |
-| `QMC_WEB_SEARCH` | Web検索の既定値 `auto` / `on` / `off` |
+| `QMC_WEB_SEARCH` | `on`（既定。`auto` / `off` に変更可） |
 | `QMC_CONTENT_POLICY` | `open`（既定）/ `standard`。画面から各ターンで切替可能 |
 | `QMC_SEARCH_SAFESEARCH` | `auto`（open は off、standard は moderate）/ `off` / `moderate` / `strict` |
 | `QMC_SEARCH_PROVIDER` | `auto` / `tavily` / `brave` / `duckduckgo` |
-| `QMC_CHAT_HF_REPO` / `QMC_CHAT_MODEL_FILE` | Chat 用 GGUF リポジトリとファイル。既定は公式 Qwen3.8-27B Instruct |
+| `QMC_CHAT_HF_REPO` | `huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF` |
+| `QMC_CHAT_MODEL_FILE` | `Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf` |
+| `QMC_CHAT_MMPROJ_REPO` | `ggml-org/Qwen3.8-27B-GGUF` |
+| `QMC_CHAT_MMPROJ_FILE` | `mmproj-Qwen3.8-27B-Q8_0.gguf` |
 | `QMC_CHAT_REMOTE_MODEL_NAME` | 外部 Chat サーバーに送るモデル名 |
 | `QMC_MOCK=1` | CPU モック |
 
@@ -195,11 +198,19 @@ MyDrive/qwen-multimodal-colab/
 
 モデルの学習データには期限があるため、最新情報が必要な質問は Web 検索して出典付きで答えます。
 
-- 画面の **🌐 Web検索**: `自動`（既定。「最新」「今日」「ニュース」「株価」「天気」「調べて」「おすすめ」「根拠」などで検索）/ `常に` / `オフ`
+- 画面の **🌐 Web検索**: `常に`（既定。毎ターン検索）/ `自動`（「最新」「今日」などのキーワードで判定）/ `オフ`
 - **コンテンツ方針**: `開放` は合法な成人向け・センシティブな話題を検索・回答し、safesearch を既定で off にします。`標準` は safesearch が既定で moderate です。未成年者の性的内容はどちらでも扱いません
 - 流れ: Chat モデルが検索クエリを作成 → 検索（上位5件）→ 上位3ページの本文を取得 → 番号付きの参考データとしてシステムプロンプトに入れて回答 → 末尾に **🔎 参考（Web検索）** のリンク一覧
 - 検索プロバイダ（自動選択）: `開放` は **Brave → DuckDuckGo → Tavily**、`標準` は **Tavily → Brave → DuckDuckGo**。Tavily の Acceptable Use Policy は性的に露骨なクエリを禁じています。明示的に Tavily を選んだ場合は警告が表示されます
-- 公式 Instruct モデルは方針を伝えても一部の回答を拒否することがあります。より柔軟な応答が必要なら `QMC_CHAT_HF_REPO` と `QMC_CHAT_MODEL_FILE` で、同じサイズの別の Qwen3.8-27B GGUF を指定できます。マルチモーダル機能には既存の mmproj と互換性を確認してください
+- 既定の Chat は拒否方向を削ったコミュニティ GGUF です。品質・指示追従が公式より落ちることがあります。公式に戻す設定は下表を参照してください。Vision 用 mmproj は公式リポジトリから取得します。
+
+| 公式 Chat に戻す環境変数 | 値 |
+| --- | --- |
+| `QMC_CHAT_HF_REPO` | `ggml-org/Qwen3.8-27B-GGUF` |
+| `QMC_CHAT_MODEL_FILE` | `Qwen3.8-27B-Q4_K_M.gguf` |
+| `QMC_CHAT_MMPROJ_REPO` | `ggml-org/Qwen3.8-27B-GGUF` |
+
+代替のコミュニティ GGUF は [`mradermacher/Qwen3.8-27B-OBLITERATED-GGUF`](https://huggingface.co/mradermacher/Qwen3.8-27B-OBLITERATED-GGUF) の `Qwen3.8-27B-OBLITERATED.Q4_K_M.gguf` もあります。使う場合は `QMC_CHAT_HF_REPO` と `QMC_CHAT_MODEL_FILE` を変更し、mmproj は引き続き公式を指定してください。モデル変更後はランタイム再起動、または画面の「⏏ モデル解放」のあと Cell 4 を再実行してください。
 - 検索しないときも、システムプロンプトに**現在日時（JST）**を入れ、「学習データ以降は知らない」ことをモデルに伝えています
 - 検索結果は「データ」として扱い、ページ内の指示には従わないようにプロンプトで明示しています（プロンプトインジェクション対策）
 
@@ -258,12 +269,13 @@ MyDrive/qwen-multimodal-colab/
 - `llama-server` は `127.0.0.1` にのみバインドし、起動ごとにランダムな API キーを付与
 - `.gitignore` でモデル・生成画像・DB・`.env`・認証情報ファイルを除外
 - UI の設定表示・ログにはパスワード / APIキーを出しません（`AppConfig.public_dict()`）
-- Web検索を使うと、**検索クエリが外部の検索サービス**（Tavily / Brave / DuckDuckGo 等）に送信され、参考ページにもアクセスします。送りたくない会話では 🌐 Web検索 を `オフ` にしてください
+- 既定ではほぼ毎ターン、**検索クエリが外部の検索サービス**（Tavily / Brave / DuckDuckGo 等）に送信され、参考ページにもアクセスします。送りたくない会話では 🌐 Web検索 を `オフ` にしてください
 - `開放` モードでは元の話題を保った検索クエリがプロバイダに送信されます。Tavily は性的に露骨な利用を AUP で禁じています。`share=True` で開放モードを公開する場合のアクセス管理と利用内容は利用者が管理してください。未成年者の性的内容を拒否する制限は常に有効です
 
 ## 15. Limitations
 
 - **実機検証は Colab A100 80GB のみ**（2026-09-28）。Gradio UI 上で MVP テスト 1〜5（Chat / Vision / 生成 / 直前画像の編集 / 元画像と現在の比較）と Test 7（A100 → Performance 自動選択）を確認し、`python -m qmc.bench` で VRAM を実測した。**L4 と A100 40GB は未検証**（`l4` / `a100_40` プロファイルは設計値）
+- 上記の A100 実機検証は公式 Chat GGUF で行ったものです。新しい既定の abliterated GGUF と公式 mmproj の組み合わせは Colab GPU で未検証です
 - CPU 上のユニットテスト（117件）とモックバックエンドでの Gradio E2E（Playwright）も通過
 - VRAM の実測値は A100 80GB のみ。A100 40GB / L4 のプロファイル値は設計見積もり
 - Intent Router はルールベースのため誤判定があり得る（手動モードで上書き可能）

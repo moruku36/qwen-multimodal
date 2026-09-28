@@ -196,6 +196,12 @@ def test_controller_uses_web_search_for_fresh_questions(app):
     assert msg.meta["web_search"]["safesearch"] == "off"
 
 
+def test_controller_default_searches_generic_question(app):
+    sid = app.sessions.create_session()
+    list(app.controller.handle(sid, "こんにちは", None, TurnOptions()))
+    assert app.controller.search.provider.queries
+
+
 def test_controller_rewrite_refusal_and_policy_prompt(app, monkeypatch):
     monkeypatch.setattr(app.controller.chat, "rewrite_search_query", lambda *a: "お答えできません")
     sid = app.sessions.create_session()
@@ -224,6 +230,6 @@ def test_controller_blocks_minor_before_search(app):
 def test_controller_skips_search_when_off_or_not_needed(app):
     sid = app.sessions.create_session()
     list(app.controller.handle(sid, "今日のニュース", None, TurnOptions(web_search="off")))
-    list(app.controller.handle(sid, "TerraformとPulumiの違い", None, TurnOptions()))
+    list(app.controller.handle(sid, "TerraformとPulumiの違い", None, TurnOptions(web_search="auto")))
     assert all("web_search" not in m.meta for m in app.sessions.get_messages(sid))
     assert app.controller.search.provider.queries == []

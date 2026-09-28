@@ -37,8 +37,9 @@ def _env_int(name: str, default: int) -> int:
 class ChatModelConfig:
     """Qwen3.8-27B served by llama.cpp ``llama-server`` (OpenAI-compatible API)."""
 
-    hf_repo: str = "ggml-org/Qwen3.8-27B-GGUF"
-    model_file: str = "Qwen3.8-27B-Q4_K_M.gguf"
+    hf_repo: str = "huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF"
+    model_file: str = "Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf"
+    mmproj_repo: str | None = "ggml-org/Qwen3.8-27B-GGUF"  # None -> hf_repo
     mmproj_file: str = "mmproj-Qwen3.8-27B-Q8_0.gguf"
     # When set, no local llama-server is started and this OpenAI-compatible endpoint is used
     # (e.g. vLLM on RunPod). Example: http://1.2.3.4:8000/v1
@@ -79,7 +80,7 @@ class AppConfig:
     mock: bool = False  # CPU-only fake backends for development and UI tests
     prompt_rewrite: str = "auto"  # auto | on | off: LLM rewrites image prompts to English
     thinking_default: bool = False
-    web_search: str = "auto"  # auto | on | off (default for the UI toggle)
+    web_search: str = "on"  # auto | on | off (default for the UI toggle)
     content_policy: str = "open"  # open | standard
     search_safesearch: str = "auto"  # auto | off | moderate | strict
     search_provider: str = "auto"  # auto | tavily | brave | duckduckgo
@@ -144,7 +145,7 @@ def load_config(**overrides) -> AppConfig:
     cfg.gpu_profile_override = _env("QMC_GPU_PROFILE", cfg.gpu_profile_override)
     cfg.prompt_rewrite = _env("QMC_PROMPT_REWRITE", cfg.prompt_rewrite) or "auto"
     cfg.thinking_default = _env_bool("QMC_THINKING", cfg.thinking_default)
-    cfg.web_search = _env("QMC_WEB_SEARCH", cfg.web_search) or "auto"
+    cfg.web_search = _env("QMC_WEB_SEARCH", cfg.web_search) or "on"
     cfg.content_policy = _env("QMC_CONTENT_POLICY", cfg.content_policy) or "open"
     cfg.search_safesearch = _env("QMC_SEARCH_SAFESEARCH", cfg.search_safesearch) or "auto"
     cfg.search_provider = _env("QMC_SEARCH_PROVIDER", cfg.search_provider) or "auto"
@@ -162,6 +163,7 @@ def load_config(**overrides) -> AppConfig:
 
     cfg.chat.hf_repo = _env("QMC_CHAT_HF_REPO", cfg.chat.hf_repo)
     cfg.chat.model_file = _env("QMC_CHAT_MODEL_FILE", cfg.chat.model_file)
+    cfg.chat.mmproj_repo = _env("QMC_CHAT_MMPROJ_REPO", cfg.chat.mmproj_repo)
     cfg.chat.mmproj_file = _env("QMC_CHAT_MMPROJ_FILE", cfg.chat.mmproj_file)
     cfg.chat.remote_base_url = _env("QMC_CHAT_BASE_URL")
     cfg.chat.remote_api_key = _env("QMC_CHAT_API_KEY")

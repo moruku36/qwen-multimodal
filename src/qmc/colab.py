@@ -223,9 +223,12 @@ def prefetch_models(chat: bool = True, image: bool = True) -> None:
 
     cfg = load_config()
     if chat and not cfg.chat.remote_base_url:
-        for f in (cfg.chat.model_file, cfg.chat.mmproj_file):
-            print("↓", cfg.chat.hf_repo, f)
-            download_hf_file(cfg.chat.hf_repo, f, cfg.hf_cache_dir)
+        print("↓", cfg.chat.hf_repo, cfg.chat.model_file)
+        download_hf_file(cfg.chat.hf_repo, cfg.chat.model_file, cfg.hf_cache_dir)
+        if cfg.chat.mmproj_file:
+            mmproj_repo = cfg.chat.mmproj_repo or cfg.chat.hf_repo
+            print("↓", mmproj_repo, cfg.chat.mmproj_file)
+            download_hf_file(mmproj_repo, cfg.chat.mmproj_file, cfg.hf_cache_dir)
     if image:
         print("↓", cfg.image.model_id)
         snapshot_download(cfg.image.model_id)
