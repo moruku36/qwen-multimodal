@@ -15,6 +15,7 @@ import html
 import logging
 import os
 import re
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -200,8 +201,11 @@ def appearance_rewrite_conflicts(rewritten: str, card: str) -> bool:
     return bool(re.search(r"\blong\b", hair) and re.search(r"\bshort hair\b", rewritten, re.I))
 
 
+# Bare "できません" is not a refusal ("結果を確認できません" is a normal answer), so only match it
+# after a verb that means "help / answer / provide".
 _REFUSAL = re.compile(
-    r"できません|お答えできません|紹介はでき|お手伝いでき|健全な範囲|取り扱えません|お断り|"
+    r"(?:お答え|お手伝い|お応え|対応|提供|紹介|回答|作成|生成|支援|協力|説明|ご案内)(?:は|も)?(?:でき(?:ません|かねます)|致しかねます|いたしかねます)|"
+    r"紹介はでき|お手伝いでき|健全な範囲|取り扱えません|お断り|"
     r"\bi (?:can'?t|cannot)\b|\bsorry\b|\bcannot recommend\b",
     re.I,
 )
@@ -327,6 +331,12 @@ class BraveProvider:
         ]
 
 
+# ddgs engine selections tried in order (None = library default). One blocked engine must not
+# end the search, so fall back across engines; the whole attempt is time-boxed.
+_DDGS_BACKENDS = (None, "duckduckgo,bing,brave,google", "bing", "brave", "yahoo", "mojeek")
+_DDGS_BUDGET_S = 25
+
+
 class DuckDuckGoProvider:
     name = "duckduckgo"
 
@@ -337,26 +347,38 @@ class DuckDuckGoProvider:
         from ddgs import DDGS  # noqa: PLC0415
 
         ddgs = DDGS()
+        deadline = time.monotonic() + _DDGS_BUDGET_S
+        outcomes: list[Exception | None] = []  # None = the call worked (even if it found nothing)
 
         def get_rows(region):
-            try:
-                return list(
-                    ddgs.text(
-                        query,
-                        region=region,
-                        max_results=max_results,
-                        safesearch=safesearch,
-                        backend="duckduckgo,brave,google",
+            """Try engine combinations until one returns rows (a single blocked engine is common)."""
+            for backend in _DDGS_BACKENDS:
+                if time.monotonic() > deadline:
+                    break
+                try:
+                    rows = list(
+                        ddgs.text(
+                            query,
+                            region=region,
+                            max_results=max_results,
+                            safesearch=safesearch,
+                            **({"backend": backend} if backend else {}),
+                        )
                     )
-                )
-            except Exception as exc:
-                if "backend" not in str(exc).lower() and not isinstance(exc, (TypeError, ValueError)):
-                    raise
-                return list(ddgs.text(query, region=region, max_results=max_results, safesearch=safesearch))
+                except Exception as exc:  # rate limit / blocked engine / unknown backend
+                    log.warning("ddgs backend=%s failed: %s", backend or "default", exc)
+                    outcomes.append(exc)
+                    continue
+                outcomes.append(None)
+                if rows:
+                    return rows
+            return []
 
         rows = get_rows(self.region)
         if not rows and self.region != "wt-wt":
             rows = get_rows("wt-wt")
+        if not rows and outcomes and all(o is not None for o in outcomes):
+            raise next(o for o in outcomes if o is not None)  # every attempt errored: surface why
         return [
             SearchResult(title=x.get("title", ""), url=x.get("href", ""), snippet=x.get("body", ""))
             for x in rows

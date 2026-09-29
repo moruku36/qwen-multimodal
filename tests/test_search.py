@@ -1,12 +1,14 @@
 import pytest
 
 from qmc.app import build_app
+from qmc.backends.base import ChatDelta
 from qmc.backends.mock import MockSearchProvider
 from qmc.chat_engine import system_prompt_now
 from qmc.config import load_config
 from qmc.controller import TurnOptions
 from qmc.gpu_manager import NO_GPU
 from qmc.search_engine import (
+    is_refusal,
     BraveProvider,
     DuckDuckGoProvider,
     MergedProvider,
@@ -246,7 +248,8 @@ def test_ddg_empty_retries_worldwide(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "ddgs", SimpleNamespace(DDGS=DDGS))
     assert DuckDuckGoProvider().search("q", 8)[0].url == "https://hit"
-    assert regions == ["jp-jp", "wt-wt"]
+    assert regions[0] == "jp-jp" and regions[-1] == "wt-wt"
+    assert "jp-jp" not in regions[regions.index("wt-wt") :]
 
 
 def test_adult_rewrite_preservation():
@@ -349,3 +352,61 @@ def test_appearance_query_generalizes_to_other_characters(text):
 
     queries = safe_appearance_queries(text, None)
     assert len(queries) == 2 and "official appearance" in queries[0] and "wiki" in queries[1]
+
+
+def test_is_refusal_ignores_plain_cannot_confirm():
+    assert not is_refusal("検索結果が存在しないため、現時点の天気は確認できません。")
+    assert not is_refusal("列挙できる固有名詞はありません。断定できません。")
+    assert is_refusal("その内容はお答えできません。")
+    assert is_refusal("紹介はできません")
+    assert is_refusal("申し訳ありませんが、対応できません。")
+
+
+def test_ddgs_falls_back_across_backends(monkeypatch):
+    import sys
+    import types
+
+    calls = []
+
+    class FakeDDGS:
+        def text(self, query, region, max_results, safesearch, backend=None):
+            calls.append(backend)
+            if backend != "bing":
+                raise RuntimeError("blocked")
+            return [{"title": "t", "href": "https://example.com", "body": "b"}]
+
+    monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=FakeDDGS))
+    from qmc.search_engine import DuckDuckGoProvider
+
+    rows = DuckDuckGoProvider().search("東京の天気", 5)
+    assert [r.url for r in rows] == ["https://example.com"]
+    assert calls[-1] == "bing" and len(calls) >= 2
+
+
+def test_ddgs_raises_when_every_backend_errors(monkeypatch):
+    import sys
+    import types
+
+    class FakeDDGS:
+        def text(self, *a, **k):
+            raise RuntimeError("rate limited")
+
+    monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=FakeDDGS))
+    from qmc.search_engine import DuckDuckGoProvider
+
+    with pytest.raises(RuntimeError, match="rate limited"):
+        DuckDuckGoProvider().search("x", 5)
+
+
+def test_no_results_shows_reason_and_skips_refusal_retry(app, monkeypatch):
+    app.controller.search.provider.search = lambda *a, **k: []
+    monkeypatch.setattr(
+        app.manager.get("chat"),
+        "stream_chat",
+        lambda messages, params, cancel=None: iter([ChatDelta(content="天気は確認できません。")]),
+    )
+    sid = app.sessions.create_session()
+    events = list(app.controller.handle(sid, "今日の東京の天気を教えて", None, TurnOptions()))
+    text = "".join(e.data for e in events if e.kind == "text")
+    assert "Web検索で結果を取得できませんでした" in text
+    assert "拒否だったため" not in "".join(str(e.data) for e in events if e.kind == "status")

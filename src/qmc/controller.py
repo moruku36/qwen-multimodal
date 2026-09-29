@@ -582,7 +582,14 @@ class ChatController:
         except Cancelled:
             cancelled = True
         text = "".join(content).strip()
-        if not cancelled and decision.intent is not Intent.VISION and policy == "open" and is_refusal(text):
+        search_failed = bool(search_meta and (search_meta.get("error") or not search_meta.get("urls")))
+        if (
+            not cancelled
+            and decision.intent is not Intent.VISION
+            and policy == "open"
+            and is_refusal(text)
+            and not search_failed  # nothing to prefer over the model's answer without search results
+        ):
             yield Event("status", "拒否だったため検索結果を優先して再生成します")
             if search_meta is None:
                 for ev in self._web_search(session_id, user_msg, replace(options, web_search="on")):
@@ -711,10 +718,11 @@ class ChatController:
         if resp.error or not resp.results:
             yield Event("status", resp.error or f"🔎 「{query}」の検索結果がありませんでした")
             meta["error"] = resp.error
+            reason = resp.error or "検索結果が見つかりませんでした"
             yield (
                 f"Web検索を行いましたが「{query}」の結果は得られませんでした。"
                 "検索結果が無いことを伝え、未確認の情報を断定しないでください。",
-                "",
+                f"\n\n---\n⚠️ Web検索で結果を取得できませんでした（{resp.provider}）: {reason}",
                 meta,
             )
             return
