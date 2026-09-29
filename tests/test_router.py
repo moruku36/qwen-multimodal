@@ -85,6 +85,10 @@ def test_manual_vision_without_image_falls_back_with_warning():
         ("ワンピースのルフィのイラストを描いて", NO_IMG, True),
         ("夕焼けの空の画像を生成して", NO_IMG, False),
         ("猫の画像を生成して", NO_IMG, False),
+        ("ルフィを描いて", NO_IMG, True),
+        ("エレン・イェーガーの画像を生成して", NO_IMG, True),
+        ("ドラゴンを描いて", NO_IMG, False),
+        ("成人の肖像を描いて", NO_IMG, False),
     ],
 )
 def test_appearance_search_route(text, ctx, expected):

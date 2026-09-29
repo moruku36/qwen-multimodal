@@ -164,7 +164,7 @@ def test_named_character_searches_before_image_rewrite(app, monkeypatch):
     events = run(app, sid, request, options=TurnOptions(web_search="on", image=ImageOptions(steps=1)))
     assert kinds(events, "route")[0].intent.value == "generate"
     assert kinds(events, "route")[0].search_appearance
-    assert app.controller.search.provider.queries == ["松本乱菊 Bleach official appearance"]
+    assert app.controller.search.provider.queries[0] == "松本乱菊 Bleach official appearance"
     assert "HAIR: long blonde hair" in captured["card"]
     generation = app.sessions.generations(sid)[-1]
     assert "NSFW" in generation["effective_prompt"]

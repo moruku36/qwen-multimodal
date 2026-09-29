@@ -19,6 +19,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
+from urllib.parse import urlparse
 from itertools import zip_longest
 from zoneinfo import ZoneInfo
 
@@ -98,7 +99,19 @@ def fallback_query(text: str) -> str:
 
 
 _APPEARANCE_NAME = re.compile(r"([一-龯]{2,6})(?:さん|ちゃん|君)|([一-龯]{4,6})を描")
-_APPEARANCE_SUBJECT = re.compile(r"([^\s、。,.!?！？]{2,30}?)の(?:画像|イラスト|絵|写真|姿|ビジュアル|キャラ)")
+_APPEARANCE_SUBJECT = re.compile(
+    r"([^\s、。,.!?！？をがはにでとへ]{2,30}?)(?:の(?:画像|イラスト|絵|写真|姿|ビジュアル|キャラ)|(?:を|が)(?:描|生成|作|書|出力))"
+)
+# Sites that host AI models / prompts rather than official character info.
+APPEARANCE_BLOCKED_DOMAINS = (
+    "civitai.com", "civarchive.com", "seaart.ai", "tensor.art", "pixai.art", "openart.ai", "lexica.art",
+    "prompthero.com", "promptbase.com", "huggingface.co", "mage.space", "playgroundai.com", "yodayo.com",
+)
+# Character wikis / encyclopedias, ranked ahead of everything else.
+APPEARANCE_PREFERRED_DOMAINS = (
+    "fandom.com", "wikia.org", "wikipedia.org", "dic.pixiv.net", "myanimelist.net", "anilist.co",
+    "kotobank.jp", "wiki", "official",
+)
 _APPEARANCE_WORK = re.compile(r"\b[A-Z][A-Za-z0-9-]{2,}\b")
 _APPEARANCE_ERA = re.compile(r"千年血戦編|千年決戦編|[一-龯]{2,10}編|Thousand.Year Blood War", re.I)
 _APPEARANCE_UNSAFE = re.compile(
@@ -110,13 +123,12 @@ _APPEARANCE_UNSAFE = re.compile(
 
 def appearance_fallback_query(text: str) -> str:
     """Search visual identity without sending the requested adult scene to providers."""
-    subject = _APPEARANCE_SUBJECT.search(text)
-    if subject:
-        name_match = None
-        text_name = subject.group(1).replace("の", " ").strip()
-    else:
-        name_match = _APPEARANCE_NAME.search(text)
-        text_name = ""
+    name_match = _APPEARANCE_NAME.search(text)
+    text_name = ""
+    if not name_match:
+        subject = _APPEARANCE_SUBJECT.search(text)
+        if subject:
+            text_name = re.sub(r"(?<=[^ぁ-ん])の(?=[^ぁ-ん])", " ", subject.group(1)).strip(" の")
     name = next((group for group in name_match.groups() if group), "") if name_match else text_name
     work = next((word for word in _APPEARANCE_WORK.findall(text) if word.lower() != "nsfw"), "")
     era_match = _APPEARANCE_ERA.search(text)
@@ -143,7 +155,22 @@ def safe_appearance_queries(request: str, rewritten: list[str] | None) -> list[s
             queries.append(query)
         if len(queries) == 3:
             break
-    return queries or [fallback]
+    queries = queries or [fallback]
+    wiki = f"{anchor} character profile wiki appearance"
+    if len(queries) < 3 and wiki not in queries:
+        queries.append(wiki)
+    return queries
+
+
+def _host(url: str) -> str:
+    return (urlparse(url).hostname or "").lower()
+
+
+def filter_appearance_results(results: list[SearchResult]) -> list[SearchResult]:
+    """Drop AI-model/prompt hosting sites and put character wikis first (stable otherwise)."""
+    kept = [r for r in results if not any(_host(r.url).endswith(d) for d in APPEARANCE_BLOCKED_DOMAINS)]
+    kept = kept or results  # never end up with nothing just because of the filter
+    return sorted(kept, key=lambda r: not any(d in _host(r.url) for d in APPEARANCE_PREFERRED_DOMAINS))
 
 
 _HAIR_COLORS = (
@@ -469,7 +496,12 @@ class WebSearchEngine:
     def search(self, query: str, safesearch: str | None = None) -> SearchResponse:
         return self.search_many([query], safesearch)
 
-    def search_many(self, queries: list[str], safesearch: str | None = None) -> SearchResponse:
+    def search_many(
+        self,
+        queries: list[str],
+        safesearch: str | None = None,
+        result_filter: Callable[[list[SearchResult]], list[SearchResult]] | None = None,
+    ) -> SearchResponse:
         queries = queries[:3]
         resp = SearchResponse(
             query=queries[0] if queries else "", provider=self.provider_name, queries=queries
@@ -489,7 +521,9 @@ class WebSearchEngine:
             resp.error = f"Web検索に失敗しました: {errors[0]}"
             return resp
         results = [result for row in zip_longest(*groups) for result in row if result is not None]
-        uniq = merge_results(results, self.max_results)
+        uniq = merge_results(results, self.max_results * 2 if result_filter else self.max_results)
+        if result_filter:
+            uniq = result_filter(uniq)[: self.max_results]
         top = uniq[: self.fetch_pages]
         if top:
             with ThreadPoolExecutor(max_workers=len(top)) as pool:

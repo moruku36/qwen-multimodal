@@ -220,7 +220,7 @@ def _options(
 def build_ui(app: App) -> gr.Blocks:
     profile = app.profile
     bands = [b for b in BANDS if b <= profile.image_max_band]
-    default_band = min(2048, profile.image_max_band)
+    default_band = min(1280, profile.image_max_band)
 
     def stream_turn(session_id: str, events: Iterator[Event], read_aloud: bool = False):
         base = render_history(app, session_id)
@@ -489,7 +489,7 @@ def build_ui(app: App) -> gr.Blocks:
                     with gr.Row():
                         aspect = gr.Dropdown(list(ASPECT_RATIOS), value="4:3", label="アスペクト比")
                         band = gr.Dropdown(bands, value=default_band, label="解像度帯")
-                    steps = gr.Slider(1, 60, value=50, step=1, label="Steps")
+                    steps = gr.Slider(1, 60, value=30, step=1, label="Steps")
                     seed = gr.Number(value=-1, precision=0, label="Seed（-1でランダム）")
                     rewrite = gr.Radio(
                         [("自動", "auto"), ("LLMで最適化", "on"), ("そのまま", "off")],
