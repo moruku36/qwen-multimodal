@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -199,6 +200,64 @@ APPEARANCE_CARD_PROMPT = (
 )
 
 
+_CARD_KEYS = {
+    "NAME": "NAME",
+    "WORK/ERA": "WORK/ERA",
+    "WORK": "WORK/ERA",
+    "ERA": "WORK/ERA",
+    "HAIR": "HAIR",
+    "EYES": "EYES",
+    "EYE": "EYES",
+    "FACE": "FACE",
+    "BODY": "BODY",
+    "SIGNATURE OUTFIT": "SIGNATURE OUTFIT",
+    "OUTFIT": "SIGNATURE OUTFIT",
+    "COSTUME": "SIGNATURE OUTFIT",
+    "STYLE": "STYLE",
+    "DO_NOT": "DO_NOT",
+    "DO NOT": "DO_NOT",
+    "CONFIDENCE": "CONFIDENCE",
+}
+_CARD_VISUAL = ("HAIR", "EYES", "FACE", "SIGNATURE OUTFIT", "STYLE")
+_CARD_UNKNOWN = {"", "UNKNOWN", "N/A", "NONE", "不明", "未確認", "-", "—"}
+
+
+def parse_appearance_card(raw: str) -> str | None:
+    """Normalize the model's card into ``KEY: value`` lines.
+
+    Tolerant on purpose: markdown bullets/bold, full-width colons and key aliases are accepted,
+    a low CONFIDENCE is kept (and flagged) rather than discarded, and NAME is not required.
+    Returns None only when no visual trait is known at all.
+    """
+    fields: dict[str, str] = {}
+    for line in (raw or "").splitlines():
+        line = re.sub(r"[*_`#>]+|^\s*(?:[-•・]|\d+[.)])\s*", "", line.replace("：", ":")).strip()
+        key, sep, value = line.partition(":")
+        canon = _CARD_KEYS.get(re.sub(r"\s+", " ", key.strip().upper()))
+        value = value.strip().strip("*_` ")
+        if sep and canon and value and canon not in fields:
+            fields[canon] = value[:220]
+    if not any(fields.get(k, "").strip(" .").upper() not in _CARD_UNKNOWN for k in _CARD_VISUAL):
+        return None
+    return "\n".join(f"{k}: {v}" for k, v in fields.items())[:2500]
+
+
+def card_summary_ja(card: str | None) -> str:
+    """One short human-readable line from a card, for the chat reply."""
+    if not card:
+        return ""
+    fields = {k: v for k, _, v in (ln.partition(":") for ln in card.splitlines())}
+    labels = (("HAIR", "髪"), ("EYES", "目"), ("SIGNATURE OUTFIT", "服装"), ("STYLE", "画風"))
+    parts = [
+        f"{jp}: {fields[k].strip()}"
+        for k, jp in labels
+        if fields.get(k, "").strip(" .").upper() not in _CARD_UNKNOWN
+    ]
+    name = fields.get("NAME", "").strip()
+    head = f"「{name}」の" if name and name.upper() not in _CARD_UNKNOWN else ""
+    return f"{head}外見メモ — " + " / ".join(parts) if parts else ""
+
+
 def appearance_card_for_references(card: str) -> str:
     """Use web text for style and outfit while attached images define identity."""
     allowed = {"NAME", "WORK/ERA", "SIGNATURE OUTFIT", "STYLE"}
@@ -335,7 +394,7 @@ class ChatEngine:
                     d.content
                     for d in model.stream_chat(
                         [{"role": "user", "content": prompt}],
-                        ChatParams(thinking=False, max_tokens=350),
+                        ChatParams(thinking=False, max_tokens=500),
                     )
                 ).strip()
         except Exception as exc:
@@ -343,31 +402,4 @@ class ChatEngine:
             return None
         if is_refusal(card):
             return None
-        allowed = {
-            "NAME",
-            "WORK/ERA",
-            "HAIR",
-            "EYES",
-            "FACE",
-            "BODY",
-            "SIGNATURE OUTFIT",
-            "STYLE",
-            "DO_NOT",
-            "CONFIDENCE",
-        }
-        lines = []
-        for line in card.splitlines():
-            key, sep, value = line.partition(":")
-            if sep and key.strip().upper() in allowed and value.strip():
-                lines.append(f"{key.strip().upper()}: {value.strip()[:180]}")
-        fields = {line.partition(":")[0]: line.partition(":")[2].strip() for line in lines}
-        if (
-            fields.get("CONFIDENCE", "").lower() == "low"
-            or not {"NAME", "HAIR"} <= fields.keys()
-            or all(
-                fields.get(key, "UNKNOWN").upper() == "UNKNOWN"
-                for key in ("HAIR", "EYES", "FACE", "SIGNATURE OUTFIT")
-            )
-        ):
-            return None
-        return "\n".join(lines)[:2500]
+        return parse_appearance_card(card)

@@ -105,3 +105,19 @@ def test_manual_generation_searches_named_character():
 def test_two_references_skip_implicit_search():
     ctx = RouteContext(has_uploads=True, upload_count=2)
     assert not route("松本乱菊さんを描いて", ctx).search_appearance
+
+
+@pytest.mark.parametrize(
+    ("text", "also_answer"),
+    [
+        ("ブリーチの松本乱菊について教えて。画像も生成して", True),
+        ("乱菊とは？イラストも描いて", True),
+        ("ブリーチの松本乱菊の画像を生成して", False),
+        ("猫の画像を生成して", False),
+    ],
+)
+def test_compound_generate_and_explain(text, also_answer):
+    decision = route(text, NO_IMG)
+    assert decision.intent is Intent.GENERATE and decision.also_answer is also_answer
+    if also_answer:
+        assert decision.search_appearance

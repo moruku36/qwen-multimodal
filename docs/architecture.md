@@ -75,7 +75,7 @@ flowchart TD
     SAVE --> R{"Intent Router<br/>router.py"}
 
     R -->|CHAT| CHAT["チャット<br/>(図4)"]
-    R -->|VISION| VIS["画像・PDF・動画の理解<br/>Qwen3.8-27B + mmproj"]
+    R -->|VISION| VIS["画像・PDF・動画の理解<br/>Qwen3.8-27B + mmproj<br/>調べて系の質問は画像の内容を踏まえて Web 検索"]
     R -->|GENERATE| GEN["画像生成<br/>(図3)"]
     R -->|EDIT| EDT["画像編集<br/>参照画像 最大10枚 / マスク"]
     R -->|RESTORE| RES["元画像を新しい版としてコピー<br/>モデルは実行しない"]
@@ -94,7 +94,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["生成 / 編集の依頼"] --> B{"固有名詞を含む?<br/>router.py<br/>(一般名詞は除外)"}
+    A["生成 / 編集の依頼"] --> B{"固有名詞を含む?<br/>または「教えて」を併記?<br/>router.py (一般名詞は除外)"}
     B -- "いいえ" --> P
     B -- "はい" --> C{"Web検索が使える?"}
     C -- "いいえ / オフ" --> U["外見は未確認として扱う<br/>参照画像を優先"]
@@ -102,10 +102,13 @@ flowchart TD
     C -- "はい" --> Q["検索クエリを作る<br/>作品名 + キャラ名 + official appearance<br/>+ character profile wiki<br/>(成人向けの場面指定はクエリから除く)"]
     Q --> S["検索して結果を絞る<br/>AIモデル配布サイトを除外<br/>Wikipedia / Fandom / ピクシブ百科事典を優先"]
     S --> CARD["外見カードを作る (Qwen3.8-27B)<br/>髪 / 目 / 服装 / 画風 など<br/>根拠のない特徴は UNKNOWN"]
+    CARD -. "カード抽出に失敗しても<br/>検索結果の抜粋を使う" .-> P
+    CARD --> ANS["「教えて」も頼まれていれば<br/>検索結果をもとに解説を書く<br/>(画像より先に同じ返信へ)"]
+    ANS --> P
     CARD --> P["画像プロンプトを英語に書き換える<br/>外見カードと矛盾する書き換えは却下<br/>(髪色の変更など)"]
     P --> SW["Chat モデル → 画像モデルへ切り替え<br/>(同時常駐できる GPU では入替なし)"]
     SW --> IMG["Qwen-Image-2.1 で生成<br/>既定 1280帯 / 30 steps<br/>ネガティブプロンプト + CFG 2.0"]
-    IMG --> SV["画像を保存<br/>参照した出典を回答に表示"]
+    IMG --> SV["1つの返信にまとめて保存<br/>解説 → 画像 → 外見メモ・出典<br/>確認できなかったときは理由も表示"]
 ```
 
 ## 4. チャットの流れ（検索・調査エージェント）

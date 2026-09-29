@@ -59,6 +59,7 @@ class RouteDecision:
     n: int = 0
     warnings: list[str] = field(default_factory=list)
     search_appearance: bool = False
+    also_answer: bool = False  # the message also asks for an explanation (text + image in one reply)
 
 
 def _rx(*words: str) -> re.Pattern:
@@ -165,6 +166,17 @@ def _named_subject(text: str) -> bool:
     return bool(_LATIN_PROPER.search(text))
 
 
+_ANSWER_REQUEST = _rx(
+    r"教えて", r"解説", r"説明", r"紹介", r"について", r"とは", r"どんな(?:人|キャラ|作品)", r"プロフィール",
+    r"explain", r"tell me about", r"describe", r"who is",
+)
+
+
+def wants_answer_too(text: str) -> bool:
+    """A generation request that also asks to be told about the subject ("〜を教えて。画像も作って")."""
+    return bool(_ANSWER_REQUEST.search(text or ""))
+
+
 def wants_appearance_search(text: str) -> bool:
     """Recognize an identity-sensitive character request, not a generic drawing."""
     return bool(
@@ -178,11 +190,13 @@ def wants_appearance_search(text: str) -> bool:
 
 def route(text: str, ctx: RouteContext, mode: Mode | str = Mode.AUTO) -> RouteDecision:
     decision = _route(text, ctx, mode)
+    if decision.intent is Intent.GENERATE:
+        decision.also_answer = wants_answer_too(text or "")
     if decision.intent in (Intent.GENERATE, Intent.EDIT):
         explicit = bool(_APPEARANCE_REQUEST.search(text or ""))
-        decision.search_appearance = wants_appearance_search(text or "") and (
-            explicit or ctx.upload_count < 2
-        )
+        decision.search_appearance = (
+            wants_appearance_search(text or "") or decision.also_answer
+        ) and (explicit or ctx.upload_count < 2)
     return decision
 
 

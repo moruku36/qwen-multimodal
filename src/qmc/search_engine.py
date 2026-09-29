@@ -101,7 +101,7 @@ def fallback_query(text: str) -> str:
 
 _APPEARANCE_NAME = re.compile(r"([一-龯]{2,6})(?:さん|ちゃん|君)|([一-龯]{4,6})を描")
 _APPEARANCE_SUBJECT = re.compile(
-    r"([^\s、。,.!?！？をがはにでとへ]{2,30}?)(?:の(?:画像|イラスト|絵|写真|姿|ビジュアル|キャラ)|(?:を|が)(?:描|生成|作|書|出力))"
+    r"([^\s、。,.!?！？をがはにでとへ]{2,30}?)(?:の(?:画像|イラスト|絵|写真|姿|ビジュアル|キャラ)|(?:を|が)(?:描|生成|作|書|出力)|について|とは)"
 )
 # Sites that host AI models / prompts rather than official character info.
 APPEARANCE_BLOCKED_DOMAINS = (
@@ -334,7 +334,7 @@ class BraveProvider:
 # ddgs engine selections tried in order (None = library default). One blocked engine must not
 # end the search, so fall back across engines; the whole attempt is time-boxed.
 _DDGS_BACKENDS = (None, "duckduckgo,bing,brave,google", "bing", "brave", "yahoo", "mojeek")
-_DDGS_BUDGET_S = 25
+_DDGS_BUDGET_S = 15
 
 
 class DuckDuckGoProvider:
@@ -533,12 +533,19 @@ class WebSearchEngine:
             return resp
         groups = []
         errors = []
-        for query in queries:
+
+        def one(query: str):
             try:
-                groups.append(self.provider.search(query, self.max_results, safesearch or self.safesearch))
+                return self.provider.search(query, self.max_results, safesearch or self.safesearch), None
             except Exception as exc:  # network, rate limit, auth
-                log.warning("web search failed: %s", exc)
-                errors.append(exc)
+                log.warning("web search failed for %r: %s", query, exc)
+                return [], exc
+
+        with ThreadPoolExecutor(max_workers=max(len(queries), 1)) as pool:  # queries are independent
+            for rows, exc in pool.map(one, queries):
+                groups.append(rows)
+                if exc is not None:
+                    errors.append(exc)
         if errors and not any(groups):
             resp.error = f"Web検索に失敗しました: {errors[0]}"
             return resp
@@ -553,6 +560,16 @@ class WebSearchEngine:
                     r.content = text or r.content
         resp.results = uniq
         return resp
+
+
+def search_digest(resp: SearchResponse, limit: int = 5, chars: int = 1200) -> str:
+    """Plain excerpt of the top results, used when a structured card could not be extracted."""
+    lines = []
+    for r in resp.results[:limit]:
+        text = _WS.sub(" ", r.snippet or r.content or "").strip()
+        if text:
+            lines.append(f"- {r.title.strip()[:60]}: {text[:260]}")
+    return "\n".join(lines)[:chars]
 
 
 def build_search_context(resp: SearchResponse, max_chars: int = 12000) -> str:

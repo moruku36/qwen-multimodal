@@ -142,3 +142,24 @@ def test_forced_images_are_not_duplicated(make_png):
         if part["type"] == "image_url"
     )
     assert n == 1
+
+
+def test_parse_appearance_card_tolerates_markdown_and_fullwidth_colon():
+    from qmc.chat_engine import card_summary_ja, parse_appearance_card
+
+    raw = (
+        "- **NAME**: 松本乱菊\\n* **HAIR：** long wavy strawberry-blonde\\nEYES: blue-gray\\n"
+        "**Signature Outfit**: black shihakusho with pink scarf\\nCONFIDENCE: low"
+    ).replace("\\n", "\n")
+    card = parse_appearance_card(raw)
+    assert "HAIR: long wavy strawberry-blonde" in card
+    assert "SIGNATURE OUTFIT: black shihakusho with pink scarf" in card
+    assert "CONFIDENCE: low" in card  # kept, not discarded
+    assert "髪: long wavy strawberry-blonde" in card_summary_ja(card)
+
+
+def test_parse_appearance_card_rejects_all_unknown():
+    from qmc.chat_engine import parse_appearance_card
+
+    assert parse_appearance_card("NAME: X\nHAIR: UNKNOWN\nEYES: 不明") is None
+    assert parse_appearance_card("できません") is None
