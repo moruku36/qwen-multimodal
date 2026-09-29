@@ -29,15 +29,17 @@ from .imaging import (
     slice_tall_image,
     webm_has_video,
 )
+from .agent import GitHubReader, ResearchAgent, find_github_repos, needs_agent
 from .model_manager import CHAT, IMAGE, ModelManager
 from .policy import MINOR_REFUSAL, blocks_minor_sexual_request
 from .router import ImageTarget, Intent, Mode, RouteContext, RouteDecision, route
 from .search_engine import (
     WebSearchEngine,
-    filter_appearance_results,
     appearance_fallback_query,
     appearance_rewrite_conflicts,
     build_search_context,
+    fetch_page_text,
+    filter_appearance_results,
     format_sources,
     is_refusal,
     needs_web_search,
@@ -66,6 +68,7 @@ class TurnOptions:
     image: ImageOptions = field(default_factory=ImageOptions)
     prompt_rewrite: str = "on"  # auto | on | off
     web_search: str = "on"  # auto | on | off
+    agent: str | None = None  # auto | on | off; None -> application default
     content_policy: str | None = None  # None -> application default
     selected_image_id: str | None = None
     mask_image: Any = None
@@ -89,6 +92,10 @@ class ChatController:
         search: WebSearchEngine | None = None,
         content_policy: str = "open",
         search_safesearch: str = "auto",
+        agent_setting: str = "auto",
+        agent_max_steps: int = 14,
+        agent_max_chars: int = 30000,
+        github_token: str | None = None,
         pdf_max_pages: int = 6,
         video_max_seconds: int = 30,
         video_max_mb: int = 80,
@@ -106,6 +113,10 @@ class ChatController:
         self.search = search
         self.content_policy = content_policy
         self.search_safesearch = search_safesearch
+        self.agent_setting = agent_setting
+        self.agent_max_steps = agent_max_steps
+        self.agent_max_chars = agent_max_chars
+        self.github = GitHubReader(github_token)
         self.pdf_max_pages = pdf_max_pages
         self.video_max_seconds = video_max_seconds
         self.video_max_mb = video_max_mb
@@ -497,15 +508,31 @@ class ChatController:
                 )
         else:
             system_extra, sources_md, search_meta = None, "", None
-            for ev in self._web_search(session_id, user_msg, options):
-                if isinstance(ev, Event):
-                    yield ev
-                else:
-                    system_extra, sources_md, search_meta = ev
+            extra_chars = 6000
+            if needs_agent(user_msg.content, options.agent or self.agent_setting):
+                for ev in self._research(user_msg, options):
+                    if isinstance(ev, Event):
+                        yield ev
+                    else:
+                        system_extra, sources_md, search_meta = ev
+                        extra_chars = self.agent_max_chars + 2000
+            else:
+                for ev in self._web_search(session_id, user_msg, options):
+                    if isinstance(ev, Event):
+                        yield ev
+                    else:
+                        system_extra, sources_md, search_meta = ev
+
+            stream_kwargs = {"extra_chars": extra_chars} if extra_chars != 6000 else {}
 
             def gen():
                 return self.chat.stream(
-                    history, params, self.cancel_event, system_extra=system_extra, content_policy=policy
+                    history,
+                    params,
+                    self.cancel_event,
+                    system_extra=system_extra,
+                    content_policy=policy,
+                    **stream_kwargs,
                 )
 
         content, reasoning = [], []
@@ -604,6 +631,50 @@ class ChatController:
             reasoning="".join(reasoning) or None,
             meta=meta,
         )
+
+    def _research(self, user_msg: MessageRecord, options: TurnOptions):
+        """Let the model read repo files / pages itself. Yields status Events, then one
+        (evidence, sources_md, meta) tuple (evidence is None if nothing could be read)."""
+        text = user_msg.content
+        repos = find_github_repos(text)
+        yield Event("status", "🔎 調査エージェントを開始します（自分でファイルを読みに行きます）")
+
+        def web_search(query: str) -> str:
+            if self.search is None or not self.search.available:
+                raise RuntimeError("Web検索が使えません")
+            resp = self.search.search(query)
+            return build_search_context(resp, max_chars=6000)
+
+        def fetch(url: str) -> str:
+            return fetch_page_text(url, limit=8000)
+
+        agent = ResearchAgent(
+            self.chat.complete_text,
+            self.github,
+            search=web_search if options.web_search != "off" else None,
+            fetch=fetch,
+            max_steps=self.agent_max_steps,
+            max_chars=self.agent_max_chars,
+        )
+        result = None
+        for item in agent.run(text, repos, self.cancel_event):
+            if isinstance(item, str):
+                yield Event("status", item)
+            else:
+                result = item
+        if result is None or not result.observations:
+            yield (None, "", None)
+            return
+        read = sum(1 for o in result.observations if o.source and "github_read" in o.call)
+        yield Event("status", f"調査完了: {len(result.observations)} 回の参照（ファイル {read} 件）")
+        meta = {
+            "purpose": "agent",
+            "repos": repos,
+            "steps": len(result.observations),
+            "sources": [o.source for o in result.observations if o.source],
+            "finished": result.finished,
+        }
+        yield (agent.evidence(result), result.sources_md(), meta)
 
     def _web_search(self, session_id: str, user_msg: MessageRecord, options: TurnOptions):
         """Yields status Events, then one (system_extra, sources_md, meta) tuple."""
