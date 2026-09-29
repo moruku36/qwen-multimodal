@@ -60,7 +60,7 @@ class TurnOptions:
     mode: Mode | str = Mode.AUTO
     thinking: bool = False
     image: ImageOptions = field(default_factory=ImageOptions)
-    prompt_rewrite: str = "auto"  # auto | on | off
+    prompt_rewrite: str = "on"  # auto | on | off
     web_search: str = "on"  # auto | on | off
     content_policy: str | None = None  # None -> application default
     selected_image_id: str | None = None

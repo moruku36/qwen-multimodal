@@ -206,7 +206,7 @@ def _options(
     return TurnOptions(
         mode=mode or Mode.AUTO.value,
         thinking=bool(thinking),
-        prompt_rewrite=rewrite or "auto",
+        prompt_rewrite=rewrite or "on",
         web_search=web_search or "auto",
         content_policy=content_policy or "open",
         image=ImageOptions(aspect=aspect or "1:1", band=int(band) if band else None,
