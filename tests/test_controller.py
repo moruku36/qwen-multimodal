@@ -139,6 +139,115 @@ def test_open_image_rewrite_drops_adult_term_uses_original(app, monkeypatch):
     assert app.sessions.generations(sid)[-1]["effective_prompt"] == "成人向けヌードを描いて"
 
 
+def test_named_character_searches_before_image_rewrite(app, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        app.controller.chat,
+        "rewrite_appearance_queries",
+        lambda request, context: ["松本乱菊 Bleach official appearance"],
+    )
+    monkeypatch.setattr(
+        app.controller.chat,
+        "build_appearance_card",
+        lambda request, search_context, context: (
+            "NAME: 松本乱菊\nHAIR: long blonde hair\nEYES: blue\nCONFIDENCE: high"
+        ),
+    )
+
+    def rewrite(request, mode, context, reference_count, appearance_card=None):
+        captured["card"] = appearance_card
+        return "NSFW portrait of Rangiku Matsumoto, long blonde hair"
+
+    monkeypatch.setattr(app.controller.chat, "rewrite_image_prompt", rewrite)
+    sid = app.sessions.create_session()
+    request = "アニメ Bleach の松本乱菊さんのNSFW画像を生成して。外見をネットで検索して別人にしないで"
+    events = run(app, sid, request, options=TurnOptions(web_search="on", image=ImageOptions(steps=1)))
+    assert kinds(events, "route")[0].intent.value == "generate"
+    assert kinds(events, "route")[0].search_appearance
+    assert app.controller.search.provider.queries == ["松本乱菊 Bleach official appearance"]
+    assert "HAIR: long blonde hair" in captured["card"]
+    generation = app.sessions.generations(sid)[-1]
+    assert "NSFW" in generation["effective_prompt"]
+    assert "long blonde hair" in generation["effective_prompt"]
+    msg = app.sessions.get_messages(sid)[-1]
+    assert "参考（Web検索）" in msg.content
+    assert msg.meta["web_search"]["purpose"] == "appearance"
+
+
+def test_named_character_search_off_still_generates(app):
+    sid = app.sessions.create_session()
+    events = run(
+        app, sid, "松本乱菊を描いて", options=TurnOptions(web_search="off", image=ImageOptions(steps=1))
+    )
+    assert kinds(events, "image")
+    assert app.controller.search.provider.queries == []
+
+
+def test_appearance_search_unavailable_warns_in_answer(app):
+    app.controller.search = None
+    sid = app.sessions.create_session()
+    run(
+        app,
+        sid,
+        "松本乱菊を描いて。外見を検索して",
+        options=TurnOptions(web_search="on", image=ImageOptions(steps=1)),
+    )
+    assert "外見を確認できませんでした" in app.sessions.get_messages(sid)[-1].content
+
+
+def test_appearance_card_overrides_conflicting_rewrite(app, monkeypatch):
+    monkeypatch.setattr(app.controller.chat, "rewrite_appearance_queries", lambda *a: [])
+    monkeypatch.setattr(
+        app.controller.chat,
+        "build_appearance_card",
+        lambda *a: "NAME: 松本乱菊\nHAIR: long blonde hair\nCONFIDENCE: high",
+    )
+    monkeypatch.setattr(
+        app.controller.chat, "rewrite_image_prompt", lambda *a, **kw: "pink hair in a high bun"
+    )
+    sid = app.sessions.create_session()
+    run(app, sid, "松本乱菊を描いて", options=TurnOptions(web_search="on", image=ImageOptions(steps=1)))
+    effective = app.sessions.generations(sid)[-1]["effective_prompt"]
+    assert "pink hair" not in effective
+    assert "long blonde hair" in effective
+
+
+def test_uploaded_face_edit_does_not_search_appearance(app, make_png):
+    sid = app.sessions.create_session()
+    events = run(
+        app,
+        sid,
+        "この顔のまま夜景にして",
+        files=[str(make_png())],
+        options=TurnOptions(web_search="on", image=ImageOptions(steps=1)),
+    )
+    assert kinds(events, "route")[0].intent.value == "edit"
+    assert app.controller.search.provider.queries == []
+
+
+def test_uploaded_reference_wins_over_web_hair(app, monkeypatch, make_png):
+    monkeypatch.setattr(app.controller.chat, "rewrite_appearance_queries", lambda *a: [])
+    monkeypatch.setattr(
+        app.controller.chat,
+        "build_appearance_card",
+        lambda *a: "NAME: 松本乱菊\nHAIR: pink hair\nSTYLE: 千年血戦編\nCONFIDENCE: high",
+    )
+    monkeypatch.setattr(
+        app.controller.chat, "rewrite_image_prompt", lambda *a, **kw: "same face and hair as reference"
+    )
+    sid = app.sessions.create_session()
+    run(
+        app,
+        sid,
+        "松本乱菊さんの外見を検索して、この画像と同じ顔で描いて",
+        files=[str(make_png())],
+        options=TurnOptions(web_search="on", image=ImageOptions(steps=1)),
+    )
+    effective = app.sessions.generations(sid)[-1]["effective_prompt"]
+    assert "pink hair" not in effective
+    assert "千年血戦編" in effective
+
+
 def test_gpu_profile_auto_selection(tmp_path):
     """Test 7 (CPU part): the detected GPU selects the profile."""
     cfg = load_config(data_dir=tmp_path / "d", local_db_path=tmp_path / "l.db")

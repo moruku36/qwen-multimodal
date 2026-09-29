@@ -18,7 +18,7 @@ from typing import Any
 
 from .asr import ASRBackend
 from .backends.base import Cancelled, ChatParams
-from .chat_engine import ChatEngine, ContextImage, ContextMessage
+from .chat_engine import ChatEngine, ContextImage, ContextMessage, appearance_card_for_references
 from .image_engine import MAX_CONDITION_IMAGES, ImageEngine, ImageOptions
 from .imaging import (
     InvalidImageError,
@@ -34,12 +34,15 @@ from .policy import MINOR_REFUSAL, blocks_minor_sexual_request
 from .router import ImageTarget, Intent, Mode, RouteContext, RouteDecision, route
 from .search_engine import (
     WebSearchEngine,
+    appearance_fallback_query,
+    appearance_rewrite_conflicts,
     build_search_context,
     format_sources,
     is_refusal,
     needs_web_search,
     preserves_adult_terms,
     resolve_safesearch,
+    safe_appearance_queries,
     usable_search_queries,
 )
 from .session_manager import ImageRecord, MessageRecord, SessionManager
@@ -307,6 +310,7 @@ class ChatController:
             )
         return RouteContext(
             has_uploads=bool(user_msg.images),
+            upload_count=len(user_msg.images),
             has_session_image=bool(prior),
             has_selected_image=bool(options.selected_image_id),
             turns_since_last_image=turns,
@@ -678,21 +682,80 @@ class ChatController:
 
         effective = instruction
         policy = options.content_policy or self.content_policy
+        appearance_card, sources_md, search_meta = None, "", None
+        unverified = False
+        if decision.search_appearance:
+            if options.web_search == "off":
+                yield Event("status", "外見検索はオフです。指定された参照画像と指示を優先します")
+            elif self.search is None or not self.search.available:
+                unverified = True
+                yield Event(
+                    "status", "⚠️ 外見を検索できませんでした。参照画像があると同一性を確認しやすくなります"
+                )
+            else:
+                yield Event("status", "外見・公式設定を検索中…")
+                rewritten_queries = self.chat.rewrite_appearance_queries(
+                    instruction, self._context(session_id, user_msg.id)[:-1]
+                )
+                queries = safe_appearance_queries(instruction, rewritten_queries)
+                safesearch = resolve_safesearch(self.search_safesearch, policy)
+                if policy == "open" and self.search.provider_name == "tavily":
+                    yield Event("status", "⚠️ Tavily は成人向け検索を規約で禁じています。Brave / DDG を推奨")
+                resp = self.search.search_many(queries, safesearch=safesearch)
+                search_meta = {
+                    "query": queries[0],
+                    "queries": queries,
+                    "original": instruction,
+                    "provider": resp.provider,
+                    "urls": [r.url for r in resp.results],
+                    "safesearch": safesearch,
+                    "purpose": "appearance",
+                }
+                if resp.results:
+                    appearance_card = self.chat.build_appearance_card(
+                        instruction, build_search_context(resp), self._context(session_id, user_msg.id)[:-1]
+                    )
+                    sources_md = format_sources(resp)
+                    if appearance_card:
+                        yield Event("status", "外見カードを作成しました")
+                if not appearance_card:
+                    unverified = True
+                    yield Event(
+                        "status", "⚠️ 外見を確認できませんでした。参照画像があると同一性を確認しやすくなります"
+                    )
+                log.info(
+                    "Appearance search: topic=%r queries=%r results=%d",
+                    appearance_fallback_query(instruction),
+                    queries,
+                    len(resp.results),
+                )
+        if appearance_card and sources:
+            appearance_card = appearance_card_for_references(appearance_card)
         if self._should_rewrite(options.prompt_rewrite):
             yield Event("status", "プロンプトを最適化中…")
-            rewritten = self.chat.rewrite_image_prompt(
+            rewrite_args = (
                 instruction,
                 "edit" if is_edit else "generate",
                 self._context(session_id, user_msg.id)[:-1],
                 len(sources),
             )
+            rewritten = (
+                self.chat.rewrite_image_prompt(*rewrite_args, appearance_card=appearance_card)
+                if appearance_card
+                else self.chat.rewrite_image_prompt(*rewrite_args)
+            )
             if (
                 rewritten
                 and not is_refusal(rewritten)
                 and (policy != "open" or preserves_adult_terms(instruction, rewritten))
+                and (not appearance_card or not appearance_rewrite_conflicts(rewritten, appearance_card))
             ):
                 effective = rewritten
-                yield Event("status", f"画像プロンプト: {effective}")
+        if appearance_card and self._should_rewrite(options.prompt_rewrite):
+            effective = f"{effective}\nIdentity traits from web sources:\n{appearance_card}"
+        if unverified and not sources:
+            effective += "\nAppearance is unverified. Do not invent specific face, hair or outfit traits."
+        yield Event("status", f"画像プロンプト: {effective}")
 
         pil_sources = [self.sessions.load_image(s) for s in sources]
         parent_seeds = set()
@@ -797,15 +860,23 @@ class ChatController:
             f"画像を{verb}しました（{records[0].width}×{records[0].height}, "
             f"{request.steps} step, {len(records)}枚, {duration:.0f}s）"
         )
+        if unverified:
+            summary += (
+                "\n\n⚠️ 外見を確認できませんでした。固有キャラの同一性を高めるには参照画像を添付してください。"
+            )
+        summary += sources_md
+        summary_meta = {
+            "prompt": instruction,
+            "effective_prompt": effective,
+            "duration_s": duration,
+            "variations": len(records),
+        }
+        if search_meta:
+            summary_meta["web_search"] = search_meta
         self.sessions.update_message(
             msg_id,
             content=summary,
-            meta={
-                "prompt": instruction,
-                "effective_prompt": effective,
-                "duration_s": duration,
-                "variations": len(records),
-            },
+            meta=summary_meta,
         )
         yield Event("text", summary)
 

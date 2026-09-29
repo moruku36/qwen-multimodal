@@ -43,6 +43,7 @@ class ImageTarget(str, Enum):
 @dataclass
 class RouteContext:
     has_uploads: bool = False
+    upload_count: int = 0
     has_session_image: bool = False
     has_selected_image: bool = False
     # user turns since the last image appeared in the conversation (0 = in the previous turn)
@@ -57,6 +58,7 @@ class RouteDecision:
     compare: bool = False
     n: int = 0
     warnings: list[str] = field(default_factory=list)
+    search_appearance: bool = False
 
 
 def _rx(*words: str) -> re.Pattern:
@@ -112,8 +114,46 @@ RESTORE_WORDS = _rx(
 
 RECENT_IMAGE_TURNS = 3
 
+_APPEARANCE_REQUEST = _rx(
+    r"検索",
+    r"調べ",
+    r"ネット",
+    r"公式",
+    r"外見",
+    r"見た目",
+    r"別人にしない",
+    r"違う人",
+    r"look up",
+    r"search the web",
+    r"official appearance",
+    r"different person",
+)
+_CHARACTER_CONTEXT = _rx(r"アニメ|漫画|マンガ|ゲーム|作品|キャラ|登場|anime|manga|game|character")
+_JAPANESE_NAME = re.compile(r"[一-龯]{2,6}(?:さん|ちゃん|君)|[一-龯]{4,6}を描")
+_ENGLISH_NAME = re.compile(r"\b[A-Z][a-z]+\s+[A-Z][a-z]+\b")
+
+
+def wants_appearance_search(text: str) -> bool:
+    """Recognize an identity-sensitive character request, not a generic drawing."""
+    return bool(
+        _JAPANESE_NAME.search(text)
+        or _ENGLISH_NAME.search(text)
+        or (_CHARACTER_CONTEXT.search(text) and _APPEARANCE_REQUEST.search(text))
+        or re.search(r"別人にしない|違う人にしない|different person", text, re.I)
+    )
+
 
 def route(text: str, ctx: RouteContext, mode: Mode | str = Mode.AUTO) -> RouteDecision:
+    decision = _route(text, ctx, mode)
+    if decision.intent in (Intent.GENERATE, Intent.EDIT):
+        explicit = bool(_APPEARANCE_REQUEST.search(text or ""))
+        decision.search_appearance = wants_appearance_search(text or "") and (
+            explicit or ctx.upload_count < 2
+        )
+    return decision
+
+
+def _route(text: str, ctx: RouteContext, mode: Mode | str = Mode.AUTO) -> RouteDecision:
     mode = Mode(mode)
     text = (text or "").strip()
     if mode is not Mode.AUTO:

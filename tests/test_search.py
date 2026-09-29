@@ -14,6 +14,8 @@ from qmc.search_engine import (
     SearchResult,
     TavilyProvider,
     WebSearchEngine,
+    appearance_fallback_query,
+    appearance_rewrite_conflicts,
     build_search_context,
     fallback_query,
     format_sources,
@@ -22,9 +24,21 @@ from qmc.search_engine import (
     needs_web_search,
     preserves_adult_terms,
     resolve_safesearch,
+    safe_appearance_queries,
     usable_search_queries,
     usable_search_query,
 )
+
+
+def test_appearance_queries_keep_identity_and_drop_adult_scene():
+    request = "アニメ Bleach の松本乱菊さんのNSFW画像を生成して。千年血戦編の外見を検索して"
+    fallback = appearance_fallback_query(request)
+    assert "松本乱菊" in fallback and "Bleach" in fallback and "千年血戦編" in fallback
+    assert "NSFW" not in fallback and "生成して" not in fallback
+    assert safe_appearance_queries(request, ["NSFW 松本乱菊", "松本乱菊 Bleach official art"]) == [
+        "松本乱菊 Bleach official art"
+    ]
+    assert appearance_rewrite_conflicts("pink hair in a high bun", "HAIR: long blonde hair")
 
 
 @pytest.mark.parametrize(
