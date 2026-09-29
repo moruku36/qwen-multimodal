@@ -70,3 +70,30 @@ def test_manual_vision_without_image_falls_back_with_warning():
     d = route("これは何", NO_IMG, "vision")
     assert d.intent == Intent.CHAT
     assert d.warnings
+
+
+@pytest.mark.parametrize(
+    ("text", "ctx", "expected"),
+    [
+        ("アニメ Bleach の松本乱菊さんを描いて。外見を検索して別人にしないで", NO_IMG, True),
+        ("松本乱菊を描いて", NO_IMG, True),
+        ("宇宙服を着た猫を描いて", NO_IMG, False),
+        ("背景を夜景にして", UPLOAD, False),
+        ("このキャラの外見を検索して同じ顔で描いて", UPLOAD, True),
+        ("背景を検索して風景を描いて", NO_IMG, False),
+    ],
+)
+def test_appearance_search_route(text, ctx, expected):
+    decision = route(text, ctx)
+    assert decision.intent in (Intent.GENERATE, Intent.EDIT)
+    assert decision.search_appearance is expected
+
+
+def test_manual_generation_searches_named_character():
+    decision = route("松本乱菊を描いて", NO_IMG, Mode.GENERATE)
+    assert decision.intent is Intent.GENERATE and decision.search_appearance
+
+
+def test_two_references_skip_implicit_search():
+    ctx = RouteContext(has_uploads=True, upload_count=2)
+    assert not route("松本乱菊さんを描いて", ctx).search_appearance

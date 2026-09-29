@@ -97,6 +97,75 @@ def fallback_query(text: str) -> str:
     return (q or text.strip())[:200]
 
 
+_APPEARANCE_NAME = re.compile(r"([一-龯]{2,6})(?:さん|ちゃん|君)|([一-龯]{4,6})を描")
+_APPEARANCE_WORK = re.compile(r"\b[A-Z][A-Za-z0-9-]{2,}\b")
+_APPEARANCE_ERA = re.compile(r"千年血戦編|千年決戦編|[一-龯]{2,10}編|Thousand.Year Blood War", re.I)
+_APPEARANCE_UNSAFE = re.compile(
+    r"NSFW|成人向け|アダルト|ポルノ|性的|セックス|エロ|ヌード|裸|脱が|"
+    r"\b(?:porn|nude|naked|sex|sexual|erotic|explicit)\b",
+    re.I,
+)
+
+
+def appearance_fallback_query(text: str) -> str:
+    """Search visual identity without sending the requested adult scene to providers."""
+    name_match = _APPEARANCE_NAME.search(text)
+    name = next((group for group in name_match.groups() if group), "") if name_match else ""
+    work = next((word for word in _APPEARANCE_WORK.findall(text) if word.lower() != "nsfw"), "")
+    era_match = _APPEARANCE_ERA.search(text)
+    if not name:
+        cleaned = _APPEARANCE_UNSAFE.sub(" ", text)
+        cleaned = re.split(r"描いて|生成して|作って|検索して|調べて", cleaned, maxsplit=1)[0]
+        name = _WS.sub(" ", cleaned).strip(" 。、をの")[:80]
+    return _WS.sub(
+        " ", f"{name} {work} {era_match.group() if era_match else ''} official appearance hair eyes costume"
+    ).strip()[:200]
+
+
+def safe_appearance_queries(request: str, rewritten: list[str] | None) -> list[str]:
+    fallback = appearance_fallback_query(request)
+    queries = []
+    anchor = fallback.split(" official appearance", 1)[0]
+    for candidate in rewritten or []:
+        query = candidate.strip()
+        if not query or len(query) > 200 or _APPEARANCE_UNSAFE.search(query):
+            continue
+        if anchor.split()[0] not in query:
+            continue
+        if query not in queries:
+            queries.append(query)
+        if len(queries) == 3:
+            break
+    return queries or [fallback]
+
+
+_HAIR_COLORS = (
+    "black",
+    "brown",
+    "blonde",
+    "golden",
+    "pink",
+    "red",
+    "blue",
+    "purple",
+    "white",
+    "silver",
+    "green",
+)
+
+
+def appearance_rewrite_conflicts(rewritten: str, card: str) -> bool:
+    """Reject obvious hair changes that would turn the character into a look-alike."""
+    hair = next(
+        (line.partition(":")[2].lower() for line in card.splitlines() if line.startswith("HAIR:")), ""
+    )
+    colors = {color for color in _HAIR_COLORS if re.search(rf"\b{color}\b", hair)}
+    prompt_colors = {color for color in _HAIR_COLORS if re.search(rf"\b{color}\s+hair\b", rewritten, re.I)}
+    if colors and prompt_colors and not prompt_colors <= colors:
+        return True
+    return bool(re.search(r"\blong\b", hair) and re.search(r"\bshort hair\b", rewritten, re.I))
+
+
 _REFUSAL = re.compile(
     r"できません|お答えできません|紹介はでき|お手伝いでき|健全な範囲|取り扱えません|お断り|"
     r"\bi (?:can'?t|cannot)\b|\bsorry\b|\bcannot recommend\b",
