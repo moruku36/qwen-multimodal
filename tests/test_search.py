@@ -321,3 +321,9 @@ def test_controller_skips_search_when_off_or_not_needed(app):
     list(app.controller.handle(sid, "TerraformとPulumiの違い", None, TurnOptions(web_search="auto")))
     assert all("web_search" not in m.meta for m in app.sessions.get_messages(sid))
     assert app.controller.search.provider.queries == []
+
+
+def test_appearance_query_from_work_and_character_subject():
+    query = appearance_fallback_query("ブリーチの松本乱菊の画像を生成して")
+    assert query.startswith("ブリーチ 松本乱菊 official appearance")
+    assert "画像" not in query

@@ -81,6 +81,10 @@ def test_manual_vision_without_image_falls_back_with_warning():
         ("背景を夜景にして", UPLOAD, False),
         ("このキャラの外見を検索して同じ顔で描いて", UPLOAD, True),
         ("背景を検索して風景を描いて", NO_IMG, False),
+        ("ブリーチの松本乱菊の画像を生成して", NO_IMG, True),
+        ("ワンピースのルフィのイラストを描いて", NO_IMG, True),
+        ("夕焼けの空の画像を生成して", NO_IMG, False),
+        ("猫の画像を生成して", NO_IMG, False),
     ],
 )
 def test_appearance_search_route(text, ctx, expected):
