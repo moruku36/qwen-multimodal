@@ -18,7 +18,13 @@ from typing import Any
 
 from .asr import ASRBackend
 from .backends.base import Cancelled, ChatParams
-from .chat_engine import ChatEngine, ContextImage, ContextMessage, appearance_card_for_references
+from .chat_engine import (
+    ChatEngine,
+    ContextImage,
+    ContextMessage,
+    appearance_card_for_references,
+    card_summary_ja,
+)
 from .image_engine import MAX_CONDITION_IMAGES, ImageEngine, ImageOptions
 from .imaging import (
     InvalidImageError,
@@ -46,6 +52,7 @@ from .search_engine import (
     preserves_adult_terms,
     resolve_safesearch,
     safe_appearance_queries,
+    search_digest,
     usable_search_queries,
 )
 from .session_manager import ImageRecord, MessageRecord, SessionManager
@@ -497,6 +504,27 @@ class ChatController:
                     "user", "この画像について詳しく説明してください。", history[-1].images
                 )
 
+            # Multimodal answer: when the question also needs the web ("これは何？最新の情報も調べて"),
+            # describe the image first so the search queries are about what is actually in it.
+            system_extra, sources_md, search_meta = None, "", None
+            if (
+                user_msg.content
+                and options.web_search != "off"
+                and needs_web_search(user_msg.content, "auto")
+            ):
+                yield Event("status", "🖼️ 画像の内容を確認して検索クエリに反映します…")
+                caption = self._caption_for_search(history, targets, policy)
+                augmented = (
+                    replace(user_msg, content=f"{user_msg.content}\n（画像の内容: {caption}）")
+                    if caption
+                    else user_msg
+                )
+                for ev in self._web_search(session_id, augmented, replace(options, web_search="auto")):
+                    if isinstance(ev, Event):
+                        yield ev
+                    else:
+                        system_extra, sources_md, search_meta = ev
+
             def gen():
                 return self.vision.stream(
                     history,
@@ -505,6 +533,7 @@ class ChatController:
                     self.cancel_event,
                     compare=decision.compare,
                     content_policy=policy,
+                    **({"system_extra": system_extra} if system_extra else {}),
                 )
         else:
             system_extra, sources_md, search_meta = None, "", None
@@ -624,7 +653,7 @@ class ChatController:
         if cancelled:
             text += "\n\n（停止しました）"
         meta = {"duration_s": round(time.time() - t0, 2), "cancelled": cancelled}
-        if decision.intent is not Intent.VISION and search_meta:
+        if search_meta:
             meta["web_search"] = search_meta
             if sources_md and not cancelled:
                 text += sources_md
@@ -638,6 +667,35 @@ class ChatController:
             reasoning="".join(reasoning) or None,
             meta=meta,
         )
+
+    def _caption_for_search(self, history, targets, policy: str) -> str:
+        """One short description of the attached image(s), used only to build better search queries."""
+        try:
+            last = history[-1]
+            asked = [
+                *history[:-1],
+                ContextMessage(
+                    last.role,
+                    "この画像に写っている主な被写体・人物・作品名・文字を、1〜2文で簡潔に書いてください。",
+                    last.images,
+                ),
+            ]
+            text = "".join(
+                d.content
+                for d in self.vision.stream(
+                    asked,
+                    targets,
+                    ChatParams(thinking=False, max_tokens=120),
+                    self.cancel_event,
+                    content_policy=policy,
+                )
+            ).strip()
+        except Cancelled:
+            raise
+        except Exception as exc:
+            log.warning("Image caption for search failed: %s", exc)
+            return ""
+        return "" if is_refusal(text) else text[:300]
 
     def _research(self, user_msg: MessageRecord, options: TurnOptions):
         """Let the model read repo files / pages itself. Yields status Events, then one
@@ -764,14 +822,15 @@ class ChatController:
         policy = options.content_policy or self.content_policy
         appearance_card, sources_md, search_meta = None, "", None
         unverified = False
+        unverified_reason = ""
+        answer_context = None  # search results reused for the written explanation (compound requests)
         if decision.search_appearance:
             if options.web_search == "off":
                 yield Event("status", "外見検索はオフです。指定された参照画像と指示を優先します")
             elif self.search is None or not self.search.available:
                 unverified = True
-                yield Event(
-                    "status", "⚠️ 外見を検索できませんでした。参照画像があると同一性を確認しやすくなります"
-                )
+                unverified_reason = "Web検索が使えません（ddgs 未インストール / APIキー未設定）"
+                yield Event("status", f"⚠️ 外見を検索できませんでした: {unverified_reason}")
             else:
                 yield Event("status", "外見・公式設定を検索中…")
                 rewritten_queries = self.chat.rewrite_appearance_queries(
@@ -793,26 +852,72 @@ class ChatController:
                     "safesearch": safesearch,
                     "purpose": "appearance",
                 }
+                if resp.error:
+                    search_meta["error"] = resp.error
                 if resp.results:
+                    yield Event("status", f"📄 {len(resp.results)}件の結果を読み込みました（{resp.provider}）")
+                    context_text = build_search_context(resp)
+                    answer_context = context_text
                     appearance_card = self.chat.build_appearance_card(
-                        instruction, build_search_context(resp), self._context(session_id, user_msg.id)[:-1]
+                        instruction, context_text, self._context(session_id, user_msg.id)[:-1]
                     )
                     sources_md = format_sources(resp)
                     if appearance_card:
                         yield Event("status", "外見カードを作成しました")
-                if not appearance_card:
+                    else:
+                        digest = search_digest(resp)
+                        if digest:
+                            # never throw away a successful search: fall back to raw excerpts
+                            appearance_card = "NOTES (unverified web excerpts):\n" + digest
+                            yield Event("status", "外見カードを抽出できなかったため、検索結果の抜粋を参考にします")
+                else:
                     unverified = True
-                    yield Event(
-                        "status", "⚠️ 外見を確認できませんでした。参照画像があると同一性を確認しやすくなります"
-                    )
+                    unverified_reason = resp.error or "外見の検索結果が0件でした"
+                    yield Event("status", f"⚠️ 外見の検索結果を取得できませんでした（{resp.provider}）: {unverified_reason}")
                 log.info(
-                    "Appearance search: topic=%r queries=%r results=%d",
+                    "Appearance search: topic=%r queries=%r results=%d card=%s",
                     appearance_fallback_query(instruction),
                     queries,
                     len(resp.results),
+                    "yes" if appearance_card else "no",
                 )
         if appearance_card and sources:
             appearance_card = appearance_card_for_references(appearance_card)
+        answer_text = ""
+        if decision.also_answer and not is_edit and not self.cancel_event.is_set():
+            yield Event("status", "解説を作成中…")
+            note = (
+                "この返答のあとに、依頼された画像が自動で生成されます。ここでは依頼された解説だけを書き、"
+                "画像そのものは出力しないでください。"
+            )
+            system_extra = "\n\n".join(x for x in (answer_context, appearance_card and f"外見メモ:\n{appearance_card}", note) if x)
+            answer_parts: list[str] = []
+
+            def answer_producer(q: queue.Queue) -> None:
+                for delta in self.chat.stream(
+                    self._context(session_id, user_msg.id),
+                    ChatParams(thinking=options.thinking),
+                    self.cancel_event,
+                    system_extra=system_extra,
+                    content_policy=policy,
+                    extra_chars=self.agent_max_chars,
+                ):
+                    q.put(delta)
+
+            try:
+                for item in self._pump(answer_producer):
+                    if isinstance(item, Event):
+                        yield item
+                    elif item.content:
+                        answer_parts.append(item.content)
+            except Cancelled:
+                raise
+            answer_text = "".join(answer_parts).strip()
+            if answer_text and is_refusal(answer_text) and policy == "open":
+                answer_text = ""  # a refusal must not replace the image the user asked for
+            if answer_text:
+                yield Event("text", answer_text + "\n\n")
+
         if self._should_rewrite(options.prompt_rewrite):
             yield Event("status", "プロンプトを最適化中…")
             rewrite_args = (
@@ -942,11 +1047,20 @@ class ChatController:
             f"画像を{verb}しました（{records[0].width}×{records[0].height}, "
             f"{request.steps} step, {len(records)}枚, {duration:.0f}s）"
         )
+        note = card_summary_ja(appearance_card) if appearance_card and not appearance_card.startswith("NOTES") else ""
+        if note:
+            summary += f"\n\n🔎 {note}（Web検索で確認）"
+        elif appearance_card:
+            summary += "\n\n🔎 Web検索の抜粋を参考にしました（外見は未検証）"
         if unverified:
             summary += (
-                "\n\n⚠️ 外見を確認できませんでした。固有キャラの同一性を高めるには参照画像を添付してください。"
+                f"\n\n⚠️ 外見を確認できませんでした（{unverified_reason}）。"
+                "固有キャラの同一性を高めるには参照画像を添付してください。"
             )
         summary += sources_md
+        shown = summary  # the explanation, if any, was already streamed to the UI
+        if answer_text:
+            summary = answer_text + "\n\n" + summary
         summary_meta = {
             "prompt": instruction,
             "effective_prompt": effective,
@@ -960,7 +1074,7 @@ class ChatController:
             content=summary,
             meta=summary_meta,
         )
-        yield Event("text", summary)
+        yield Event("text", shown)
 
     def _should_rewrite(self, setting: str) -> bool:
         if setting == "off":

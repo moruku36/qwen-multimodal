@@ -320,3 +320,71 @@ def test_image_rewrite_refusal_uses_original(app, monkeypatch):
     sid = app.sessions.create_session()
     run(app, sid, "成人の肖像を描いて", options=TurnOptions(image=ImageOptions(steps=1), prompt_rewrite="on"))
     assert app.sessions.generations(sid)[-1]["effective_prompt"] == "成人の肖像を描いて"
+
+
+def test_unparseable_card_falls_back_to_search_excerpts(app):
+    """Mock chat returns prose (no KEY: value lines): the search must not be thrown away."""
+    sid = app.sessions.create_session()
+    run(
+        app,
+        sid,
+        "ブリーチの松本乱菊の画像を生成して",
+        options=TurnOptions(web_search="on", image=ImageOptions(steps=1)),
+    )
+    msg = app.sessions.get_messages(sid)[-1]
+    generation = app.sessions.generations(sid)[-1]
+    assert "NOTES (unverified web excerpts)" in generation["effective_prompt"]
+    assert "外見を確認できませんでした" not in msg.content
+    assert "抜粋を参考にしました" in msg.content
+
+
+def test_appearance_search_failure_shows_reason(app):
+    app.controller.search.provider.search = lambda *a, **k: []
+    sid = app.sessions.create_session()
+    events = run(
+        app,
+        sid,
+        "ブリーチの松本乱菊の画像を生成して",
+        options=TurnOptions(web_search="on", image=ImageOptions(steps=1)),
+    )
+    assert "外見を確認できませんでした（外見の検索結果が0件でした）" in app.sessions.get_messages(sid)[-1].content
+    assert any("外見の検索結果を取得できませんでした" in str(e.data) for e in events if e.kind == "status")
+
+
+def test_compound_request_answers_then_generates_in_one_message(app):
+    sid = app.sessions.create_session()
+    events = run(
+        app,
+        sid,
+        "ブリーチの松本乱菊について教えて。画像も生成して",
+        options=TurnOptions(web_search="on", image=ImageOptions(steps=1)),
+    )
+    route = kinds(events, "route")[0]
+    assert route.intent.value == "generate" and route.also_answer and route.search_appearance
+    assert kinds(events, "image")
+    messages = [m for m in app.sessions.get_messages(sid) if m.role == "assistant"]
+    assert len(messages) == 1
+    content = messages[0].content
+    assert content.index("検索結果によると") < content.index("画像を生成しました")  # text first, then image note
+    assert "".join(kinds(events, "text")).count("検索結果によると") == 1  # no duplicate streaming
+
+
+def test_vision_question_with_lookup_uses_web_search(app, make_png):
+    sid = app.sessions.create_session()
+    events = run(
+        app,
+        sid,
+        "この画像は何ですか？最新の情報を調べて",
+        [str(make_png())],
+        options=TurnOptions(web_search="on", image=ImageOptions(steps=1)),
+    )
+    assert kinds(events, "route")[0].intent.value == "vision"
+    assert app.controller.search.provider.queries
+    msg = app.sessions.get_messages(sid)[-1]
+    assert "参考（Web検索）" in msg.content and msg.meta["web_search"]["urls"]
+
+
+def test_plain_vision_question_does_not_search(app, make_png):
+    sid = app.sessions.create_session()
+    run(app, sid, "この画像に何が写っていますか？", [str(make_png())], options=TurnOptions(web_search="on"))
+    assert app.controller.search.provider.queries == []

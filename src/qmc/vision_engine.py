@@ -30,6 +30,7 @@ class VisionEngine:
         cancel: threading.Event | None = None,
         compare: bool = False,
         content_policy: str = "open",
+        system_extra: str | None = None,
     ) -> Iterator[ChatDelta]:
         if not targets:
             raise ValueError("Vision には画像が必要です。画像を添付するか、先に画像を生成してください。")
@@ -38,4 +39,11 @@ class VisionEngine:
             last = history[-1]
             hint = COMPARE_HINT.format(n=len(targets), first=targets[0].caption, last=targets[-1].caption)
             history[-1] = ContextMessage(last.role, f"{last.text}\n\n{hint}", last.images)
-        yield from self.chat.stream(history, params, cancel, extra_images=targets, content_policy=content_policy)
+        yield from self.chat.stream(
+            history,
+            params,
+            cancel,
+            extra_images=targets,
+            system_extra=system_extra,
+            content_policy=content_policy,
+        )
