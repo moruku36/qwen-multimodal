@@ -75,8 +75,10 @@ flowchart TD
 
 | 用途 | モデル | 実行方法 | 量子化 | ライセンス |
 | --- | --- | --- | --- | --- |
-| Text / Vision / Reasoning | [`huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF) `Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf` + [公式 mmproj](https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF) `mmproj-Qwen3.8-27B-Q8_0.gguf` | llama.cpp `llama-server`（commit `4da6337` を固定ビルド） | GGUF Q4_K_M | Apache-2.0 |
+| Text / Vision / Reasoning | [`huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF) `Huihui-Qwen3.8-27B-abliterated-UD-DW-Q8_K_L.gguf` + [公式 mmproj](https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF) `mmproj-Qwen3.8-27B-Q8_0.gguf` | llama.cpp `llama-server`（commit `4da6337` を固定ビルド） | GGUF Q8_K_L（旧: Q4_K_M） | Apache-2.0 |
 | Image Generation / Editing | [`Qwen/Qwen-Image-2.1`](https://huggingface.co/Qwen/Qwen-Image-2.1) | diffusers `QwenImage21Pipeline`（main `e0abab8` 固定） | A100: bf16 / L4: DiT int8 (torchao) | Qwen Research License（非商用研究用途） |
+
+**推奨構成**: メインの GPU は **A100 80GB**、Chat は **Qwen3.8-27B Q8_K_L**（Q4_K_M から変更）です。L4 / A100 40GB 向けのプロファイルもそのまま残していますが、Q8_K_L での動作は A100 80GB 以外では未確認です。Q8_K_L での VRAM は **未計測**（過去の実測は Q4_K_M 時の値。[`docs/vram-measurements.md`](docs/vram-measurements.md) 参照）。
 
 **なぜ2モデル？** Qwen3.8-27B は画像・動画入力に対応したネイティブVLMです。Chat GGUF と公式 `mmproj` は別リポジトリから取得します。Vision 専用モデルを常駐させる必要がないため、VRAMを節約できる2モデル構成にしました。
 `11_qwen3_vl_image_judge.ipynb` は Google Drive 上で見つからず、内容を比較できていません（見つかれば `ChatBackend` を追加して3モデル構成にも拡張できます）。
@@ -96,7 +98,7 @@ flowchart TD
 | 既定ステップ数 / 最大解像度帯 | 40 / 2048 | 40 / 2048 | 28 / 1280 |
 | VAE タイリング | なし | なし | 2048帯以上 |
 
-判断根拠（計測前の設計値）: 27B Q4_K_M ≈ 17GB + KV、Qwen-Image のテキストエンコーダ（Qwen3-VL 8B, bf16）≈ 16–17GB、DiT 7B（bf16 ≈ 14GB / int8 ≈ 7GB）。
+判断根拠（計測前の設計値。Q4_K_M 時代の見積もりで、Q8_K_L への変更後は未再計測）: 27B Q4_K_M ≈ 17GB + KV（Q8_K_L の GGUF は約 27GB で、その分 VRAM 使用量は増える。実測値は未計測）、Qwen-Image のテキストエンコーダ（Qwen3-VL 8B, bf16）≈ 16–17GB、DiT 7B（bf16 ≈ 14GB / int8 ≈ 7GB）。
 そのため 40GB 以下では同時常駐させず、`ModelManager` が必要なときだけ切り替えます（同じモデルの無駄な再ロードはしません）。
 **L4 では Chat ↔ Image の切り替えごとに数十秒〜1分程度の待ち**が発生します。
 
@@ -165,7 +167,7 @@ python -m qmc --share         # 公開URL（Security 参照）
 | `QMC_TTS` | `on` / `off`。読み上げの既定値（既定 `off`） |
 | `QMC_TTS_VOICE` | edge-tts の声。既定 `ja-JP-NanamiNeural` |
 | `QMC_CHAT_HF_REPO` | `huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF` |
-| `QMC_CHAT_MODEL_FILE` | `Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf` |
+| `QMC_CHAT_MODEL_FILE` | `Huihui-Qwen3.8-27B-abliterated-UD-DW-Q8_K_L.gguf` |
 | `QMC_CHAT_MMPROJ_REPO` | `ggml-org/Qwen3.8-27B-GGUF` |
 | `QMC_CHAT_MMPROJ_FILE` | `mmproj-Qwen3.8-27B-Q8_0.gguf` |
 | `QMC_CHAT_REMOTE_MODEL_NAME` | 外部 Chat サーバーに送るモデル名 |
