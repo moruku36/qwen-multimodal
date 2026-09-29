@@ -34,6 +34,8 @@ Google Colab の GPU をバックエンドにして、ブラウザから ChatGPT
 
 ## 2. Architecture
 
+全体像は下図です。1ターンの流れ・画像生成・チャット（検索と調査エージェント）・GPU 配置・データ保存・モジュール構成の図は [docs/architecture.md](docs/architecture.md) にあります。
+
 ```mermaid
 flowchart TD
     B[Browser] --> UI[Gradio Web UI<br/>src/qmc/ui.py]
@@ -41,26 +43,29 @@ flowchart TD
     C --> R{Intent Router<br/>router.py}
     R -->|Chat| CE[ChatEngine]
     R -->|Vision| VE[VisionEngine]
-    R -->|Generate| IE[ImageEngine]
-    R -->|Edit| IE
+    R -->|Generate / Edit| IE[ImageEngine]
+    R -->|Restore| RS[元画像を新しい版としてコピー]
+    C -->|検索 / GitHub URL| SA[Web検索・外見検索<br/>調査エージェント]
+    SA --> Web[[Brave / DuckDuckGo / Tavily / GitHub]]
     C --> SM[SessionManager<br/>messages / images lineage]
     SM --> DB[(SQLite local)]
     DB -. snapshot each turn .-> GD[(Google Drive<br/>history.db + images)]
     CE --> MM[Model Manager<br/>lazy load / swap / OOM recovery]
     VE --> MM
     IE --> MM
-    MM --> Q27[Qwen3.8-27B<br/>llama-server subprocess<br/>OpenAI-compatible API]
+    MM --> Q27[Qwen3.8-27B Q8_K_L + mmproj<br/>llama-server subprocess<br/>OpenAI-compatible API]
     MM --> QI[Qwen-Image-2.1<br/>diffusers QwenImage21Pipeline]
     MM --> GM[GPU Manager]
-    GM --> A100[A100: Performance Mode]
-    GM --> L4[L4: Low VRAM Mode]
+    GM --> A100[A100 80GB: 同時常駐（メイン）]
+    GM --> A40[A100 40GB / L4: 入れ替え]
 ```
 
 | 層 | ファイル | 役割 |
 | --- | --- | --- |
 | UI | `ui.py` | Gradio。ロジックは持たず Controller のイベントを描画するだけ |
 | Controller | `controller.py` | 1ターン = ルーティング → エンジン実行 → 履歴保存。UI非依存のイベントストリーム |
-| Router | `router.py` | ルールベースの意図判定（日本語/英語）＋手動モード |
+| Router | `router.py` | ルールベースの意図判定（日本語/英語）＋手動モード。固有キャラの外見検索が必要かも判定 |
+| 検索・調査 | `search_engine.py`, `agent.py` | Web 検索、外見検索、GitHub 等を読む調査エージェント |
 | Engines | `chat_engine.py`, `vision_engine.py`, `image_engine.py` | 文脈組み立て・生成パラメータ |
 | Model Manager | `model_manager.py` | 遅延ロード、同時常駐可否に応じたアンロード、OOM時の回復 |
 | GPU Manager | `gpu_manager.py` | GPU判定・プロファイル選択・VRAM計測 |
