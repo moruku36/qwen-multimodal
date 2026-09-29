@@ -133,27 +133,36 @@ _JAPANESE_NAME = re.compile(r"[一-龯]{2,6}(?:さん|ちゃん|君)|[一-龯]{4
 _ENGLISH_NAME = re.compile(r"\b[A-Z][a-z]+\s+[A-Z][a-z]+\b")
 
 
-# "<作品>の<キャラ名>の画像を…" — a named subject placed before a picture noun
-_SUBJECT_BEFORE_PICTURE = re.compile(
-    r"(?P<subject>[^\s、。,.!?！？]{2,30}?)の(?:画像|イラスト|絵|写真|姿|ビジュアル|キャラ)"
+# "<作品>の<キャラ名>の画像を…" / "<キャラ名>を描いて" — a named subject before a picture noun or verb
+_SUBJECT_CHARS = r"[^\s、。,.!?！？をがはにでとへ]"
+_SUBJECT_PATTERNS = (
+    re.compile(rf"(?P<subject>{_SUBJECT_CHARS}{{2,30}}?)の(?:画像|イラスト|絵|写真|姿|ビジュアル|キャラ)"),
+    re.compile(rf"(?P<subject>{_SUBJECT_CHARS}{{2,30}}?)(?:を|が)(?:描|生成|作|書|出力)"),
 )
 _GENERIC_SUBJECTS = frozenset(
     "風景 景色 夕焼け 夕日 朝焼け 空 海 山 森 花 猫 犬 鳥 動物 街 街並み 町 夜景 部屋 家 建物 料理 食べ物 "
-    "車 人物 人 女性 男性 女の子 男の子 少女 少年 子供 赤ちゃん 背景 ロゴ アイコン 未来都市 都市 宇宙".split()
+    "車 人物 人 女性 男性 女の子 男の子 少女 少年 子供 赤ちゃん 背景 ロゴ アイコン 未来都市 都市 宇宙 "
+    "ドラゴン ロボット ネコ イヌ ウサギ ライオン ペンギン キャラクター イラスト ポスター デザイン パターン "
+    "肖像 肖像画 ポートレート 顔 全身 成人 大人 テクスチャ サイバーパンク ファンタジー アニメ マンガ 漫画".split()
 )
+_PICTURE_TAIL = re.compile(r"の?(?:画像|イラスト|絵|写真|姿|ビジュアル|キャラ)$")
+_LATIN_PROPER = re.compile(r"(?<!^)(?<![.!?] )\b[A-Z][a-z]{2,}\b")
 
 
 def _named_subject(text: str) -> bool:
     """A proper-noun-looking subject ("作品の人物名") rather than a generic scene or object."""
-    for m in _SUBJECT_BEFORE_PICTURE.finditer(text):
-        subject = m.group("subject")
-        parts = [p for p in subject.split("の") if p]
-        if not parts or subject in _GENERIC_SUBJECTS or parts[-1] in _GENERIC_SUBJECTS:
-            continue
-        # "作品の名前" (two or more parts) or a bare name of 3+ kanji/katakana
-        if len(parts) >= 2 or re.fullmatch(r"[一-龯ァ-ヶー]{3,8}", subject):
-            return True
-    return False
+    for pattern in _SUBJECT_PATTERNS:
+        for m in pattern.finditer(text):
+            subject = _PICTURE_TAIL.sub("", m.group("subject"))
+            parts = [p for p in subject.split("の") if p]
+            if parts and parts[0] in _GENERIC_SUBJECTS:
+                continue
+            if not parts or subject in _GENERIC_SUBJECTS or parts[-1] in _GENERIC_SUBJECTS:
+                continue
+            # "作品の名前" (two or more parts) or a bare name of 3+ kanji/katakana/latin
+            if len(parts) >= 2 or re.fullmatch(r"[一-龯ァ-ヶー・A-Za-z]{3,12}", subject):
+                return True
+    return bool(_LATIN_PROPER.search(text))
 
 
 def wants_appearance_search(text: str) -> bool:

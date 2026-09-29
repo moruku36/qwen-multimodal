@@ -34,6 +34,7 @@ from .policy import MINOR_REFUSAL, blocks_minor_sexual_request
 from .router import ImageTarget, Intent, Mode, RouteContext, RouteDecision, route
 from .search_engine import (
     WebSearchEngine,
+    filter_appearance_results,
     appearance_fallback_query,
     appearance_rewrite_conflicts,
     build_search_context,
@@ -701,7 +702,9 @@ class ChatController:
                 safesearch = resolve_safesearch(self.search_safesearch, policy)
                 if policy == "open" and self.search.provider_name == "tavily":
                     yield Event("status", "⚠️ Tavily は成人向け検索を規約で禁じています。Brave / DDG を推奨")
-                resp = self.search.search_many(queries, safesearch=safesearch)
+                resp = self.search.search_many(
+                    queries, safesearch=safesearch, result_filter=filter_appearance_results
+                )
                 search_meta = {
                     "query": queries[0],
                     "queries": queries,

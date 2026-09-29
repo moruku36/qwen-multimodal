@@ -188,7 +188,7 @@ APPEARANCE_QUERY_PROMPT = (
     "Write 1 or 2 web search queries about this named character's official visual design. "
     "Keep the character name, work and era verbatim. Include hair, eyes, outfit or official art. "
     "Do not include adult or sexual scene terms. Output ONLY queries, one per line.\n"
-    "Identity topic: {topic}"
+    "Identity topic: {topic}\nUser request (identify the character/person and work from it): {request}"
 )
 
 APPEARANCE_CARD_PROMPT = (
@@ -303,7 +303,7 @@ class ChatEngine:
                 text = "".join(
                     d.content
                     for d in model.stream_chat(
-                        [{"role": "user", "content": APPEARANCE_QUERY_PROMPT.format(topic=topic)}],
+                        [{"role": "user", "content": APPEARANCE_QUERY_PROMPT.format(topic=topic, request=request[:300])}],
                         ChatParams(thinking=False, max_tokens=120),
                     )
                 )

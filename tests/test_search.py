@@ -35,9 +35,9 @@ def test_appearance_queries_keep_identity_and_drop_adult_scene():
     fallback = appearance_fallback_query(request)
     assert "松本乱菊" in fallback and "Bleach" in fallback and "千年血戦編" in fallback
     assert "NSFW" not in fallback and "生成して" not in fallback
-    assert safe_appearance_queries(request, ["NSFW 松本乱菊", "松本乱菊 Bleach official art"]) == [
-        "松本乱菊 Bleach official art"
-    ]
+    queries = safe_appearance_queries(request, ["NSFW 松本乱菊", "松本乱菊 Bleach official art"])
+    assert queries[0] == "松本乱菊 Bleach official art"
+    assert "wiki" in queries[1] and not any("NSFW" in q for q in queries)
     assert appearance_rewrite_conflicts("pink hair in a high bun", "HAIR: long blonde hair")
 
 
@@ -327,3 +327,25 @@ def test_appearance_query_from_work_and_character_subject():
     query = appearance_fallback_query("ブリーチの松本乱菊の画像を生成して")
     assert query.startswith("ブリーチ 松本乱菊 official appearance")
     assert "画像" not in query
+
+
+def test_filter_appearance_results_drops_ai_model_sites_and_prefers_wikis():
+    from qmc.search_engine import SearchResult, filter_appearance_results
+
+    rows = [
+        SearchResult(title="a", url="https://civitai.com/models/1", snippet=""),
+        SearchResult(title="b", url="https://example.com/x", snippet=""),
+        SearchResult(title="c", url="https://bleach.fandom.com/wiki/Rangiku", snippet=""),
+    ]
+    assert [r.title for r in filter_appearance_results(rows)] == ["c", "b"]
+    assert filter_appearance_results(rows[:1]) == rows[:1]  # never empty
+
+
+@pytest.mark.parametrize(
+    "text", ["ルフィを描いて", "Naruto Uzumaki を描いて", "ワンピースのルフィのイラストを描いて"]
+)
+def test_appearance_query_generalizes_to_other_characters(text):
+    from qmc.search_engine import safe_appearance_queries
+
+    queries = safe_appearance_queries(text, None)
+    assert len(queries) == 2 and "official appearance" in queries[0] and "wiki" in queries[1]
