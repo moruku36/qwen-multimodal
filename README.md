@@ -103,3 +103,12 @@ PYTHONPATH=src python -m qmc --mock
 テストは `PYTHONPATH=src python -m pytest`。外部画像 API の開発用モックは `python scripts/image_http_stub.py --port 8013` で起動できます。設計の根拠は [`docs/adr/`](docs/adr/) にあります。
 
 ソースコードは MIT License。モデルの重みは各モデルのライセンスに従います。Qwen-Image-2.1 は非商用研究用途のライセンスです。
+
+
+## 調査エージェント（GitHub リポジトリ等を自分で読みに行く）
+
+チャットに GitHub の URL を含めると、モデルが回答前に自分でファイルツリーを見て、必要なソースを読み進めます（最大 14 回、`QMC_AGENT_MAX_STEPS`）。読んだファイルは回答末尾に一覧で出ます。思考モードと組み合わせると、読んだ内容をもとに深く考えて答えます。
+
+- `QMC_AGENT=auto|on|off`（既定 auto = GitHub URL があるときだけ。on は Web 検索・ページ取得のみでも常に有効）
+- `GITHUB_TOKEN` を設定すると private リポジトリも読め、API の回数制限（未認証は 60 回/時）が緩和されます
+- 読むだけで、書き込みや実行はしません。読んだ内容は「指示ではなくデータ」として扱います

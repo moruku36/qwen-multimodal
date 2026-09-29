@@ -229,16 +229,25 @@ class ChatEngine:
         extra_images: list[ContextImage] | None = None,
         system_extra: str | None = None,
         content_policy: str = "open",
+        extra_chars: int = 6000,
     ) -> Iterator[ChatDelta]:
         messages = build_messages(
             history,
-            system_prompt=system_prompt_now(system_extra[:6000] if system_extra else None, content_policy),
+            system_prompt=system_prompt_now(system_extra[:extra_chars] if system_extra else None, content_policy),
             max_messages=self.max_messages,
             max_images=self.max_images if extra_images else min(self.max_images, 1),
             extra_images=extra_images,
         )
         with self.manager.use(CHAT) as model:
             yield from model.stream_chat(messages, params, cancel)
+
+    def complete_text(self, prompt: str, max_tokens: int = 400) -> str:
+        """One non-thinking completion (used by the research agent for its next-action JSON)."""
+        params = ChatParams(thinking=False, max_tokens=max_tokens, temperature=0.2)
+        with self.manager.use(CHAT) as model:
+            return "".join(
+                d.content for d in model.stream_chat([{"role": "user", "content": prompt}], params)
+            ).strip()
 
     def rewrite_search_queries(self, request: str, context: list[ContextMessage]) -> list[str]:
         """Turn the user's question into up to three web search queries."""

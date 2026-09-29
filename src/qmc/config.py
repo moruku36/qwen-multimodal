@@ -90,6 +90,10 @@ class AppConfig:
     search_fetch_pages: int = 5
     search_page_chars: int = 4000
     search_region: str = "jp-jp"
+    agent: str = "auto"  # auto (GitHub URL in the message) | on | off: read files/pages before answering
+    agent_max_steps: int = 14
+    agent_max_chars: int = 30000
+    github_token: str | None = None  # private repos / higher GitHub API rate limit
     max_context_messages: int = 24
     max_context_images: int = 3
     max_upload_mb: int = 30
@@ -163,6 +167,10 @@ def load_config(**overrides) -> AppConfig:
     cfg.search_fetch_pages = _env_int("QMC_SEARCH_FETCH_PAGES", cfg.search_fetch_pages)
     cfg.search_page_chars = _env_int("QMC_SEARCH_PAGE_CHARS", cfg.search_page_chars)
     cfg.search_region = _env("QMC_SEARCH_REGION", cfg.search_region) or "jp-jp"
+    cfg.agent = _env("QMC_AGENT", cfg.agent) or "auto"
+    cfg.agent_max_steps = _env_int("QMC_AGENT_MAX_STEPS", cfg.agent_max_steps)
+    cfg.agent_max_chars = _env_int("QMC_AGENT_MAX_CHARS", cfg.agent_max_chars)
+    cfg.github_token = _env("GITHUB_TOKEN", cfg.github_token) or _env("QMC_GITHUB_TOKEN", None)
     cfg.pdf_max_pages = _env_int("QMC_PDF_MAX_PAGES", cfg.pdf_max_pages)
     cfg.video_max_seconds = _env_int("QMC_VIDEO_MAX_SECONDS", cfg.video_max_seconds)
     cfg.video_max_mb = _env_int("QMC_VIDEO_MAX_MB", cfg.video_max_mb)
