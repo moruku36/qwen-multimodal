@@ -167,7 +167,10 @@ REWRITE_PROMPT = (
     "You convert a user's request into a prompt for the image model Qwen-Image-2.1.\n"
     "Mode: {mode}.\n"
     "- generate: write one detailed English prompt (subject, composition, lighting, style). Keep any text "
-    "that must appear in the image in its original language inside quotes.\n"
+    "that must appear in the image in its original language inside quotes. The user's request is often "
+    "short: fill in whatever they left unspecified (background/setting, camera angle and lens, lighting, "
+    "color palette, texture/material detail, mood) with fitting, concrete choices, but never contradict or "
+    "replace anything they did specify, and do not add new subjects or text.\n"
     "- edit: write one concise English edit instruction describing only the change to apply to the given "
     "image, and say what must stay unchanged. There are {reference_count} reference images in attachment order; "
     "preserve requested face, outfit, and layout from the specified references.\n"
@@ -250,7 +253,7 @@ class ChatEngine:
                 text = "".join(
                     d.content
                     for d in model.stream_chat(
-                        [{"role": "user", "content": prompt}], ChatParams(thinking=False, max_tokens=400)
+                        [{"role": "user", "content": prompt}], ChatParams(thinking=False, max_tokens=800)
                     )
                 )
         except Exception as exc:

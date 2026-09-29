@@ -23,6 +23,13 @@ ASPECT_RATIOS: dict[str, tuple[int, int]] = {
     "9:16": (1536, 2752),
 }
 BANDS = (512, 768, 1024, 1280, 1536, 2048)
+# Always-on negative prompt. The backend only applies it when true_cfg_scale > 1.
+DEFAULT_NEGATIVE_PROMPT = (
+    "child, children, kid, toddler, infant, baby, minor, underage, teenager, schoolchild, "
+    "childlike body, loli, shota, low quality, blurry, deformed, extra fingers, watermark"
+)
+DEFAULT_TRUE_CFG_SCALE = 2.0  # docs/phase0-research.md: ~2 when a negative prompt is used
+
 MAX_CONDITION_IMAGES = 10  # Qwen-Image-2.1 model card
 
 
@@ -54,7 +61,7 @@ class ImageOptions:
     steps: int | None = None
     seed: int | None = None  # None / -1 = random
     negative_prompt: str | None = None
-    true_cfg_scale: float = 1.0
+    true_cfg_scale: float = DEFAULT_TRUE_CFG_SCALE
     variations: int = 1
 
 
@@ -76,13 +83,16 @@ class ImageEngine:
         band = clamp_band(options.band or self.default_band, self.profile)
         steps = int(options.steps or self.profile.image_default_steps)
         seed = choose_seed(options.seed, avoid_seeds)
+        negative = options.negative_prompt
+        if negative is None:
+            negative = DEFAULT_NEGATIVE_PROMPT
         request = ImageRequest(
             prompt=prompt.strip(),
             images=list(sources or []),
             output_resolution=band,
             steps=max(1, min(steps, 100)),
             seed=seed,
-            negative_prompt=options.negative_prompt,
+            negative_prompt=negative,
             true_cfg_scale=options.true_cfg_scale,
         )
         if not request.images:

@@ -80,7 +80,7 @@ class AppConfig:
     image: ImageModelConfig = field(default_factory=ImageModelConfig)
     gpu_profile_override: str | None = None  # a100_80 | a100_40 | l4 | cpu
     mock: bool = False  # CPU-only fake backends for development and UI tests
-    prompt_rewrite: str = "auto"  # auto | on | off: LLM rewrites image prompts to English
+    prompt_rewrite: str = "on"  # auto | on | off: LLM rewrites image prompts to English
     thinking_default: bool = False
     web_search: str = "on"  # auto | on | off (default for the UI toggle)
     content_policy: str = "open"  # open | standard
@@ -153,7 +153,7 @@ def load_config(**overrides) -> AppConfig:
 
     cfg.mock = _env_bool("QMC_MOCK", cfg.mock)
     cfg.gpu_profile_override = _env("QMC_GPU_PROFILE", cfg.gpu_profile_override)
-    cfg.prompt_rewrite = _env("QMC_PROMPT_REWRITE", cfg.prompt_rewrite) or "auto"
+    cfg.prompt_rewrite = _env("QMC_PROMPT_REWRITE", cfg.prompt_rewrite) or "on"
     cfg.thinking_default = _env_bool("QMC_THINKING", cfg.thinking_default)
     cfg.web_search = _env("QMC_WEB_SEARCH", cfg.web_search) or "on"
     cfg.content_policy = _env("QMC_CONTENT_POLICY", cfg.content_policy) or "open"
