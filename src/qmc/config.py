@@ -38,7 +38,7 @@ class ChatModelConfig:
     """Qwen3.8-27B served by llama.cpp ``llama-server`` (OpenAI-compatible API)."""
 
     hf_repo: str = "huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF"
-    model_file: str = "Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf"
+    model_file: str = "Huihui-Qwen3.8-27B-abliterated-UD-DW-Q8_K_L.gguf"
     mmproj_repo: str | None = "ggml-org/Qwen3.8-27B-GGUF"  # None -> hf_repo
     mmproj_file: str = "mmproj-Qwen3.8-27B-Q8_0.gguf"
     # When set, no local llama-server is started and this OpenAI-compatible endpoint is used

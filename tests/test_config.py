@@ -41,7 +41,7 @@ def test_model_and_search_defaults(monkeypatch):
     cfg = load_config()
     assert cfg.web_search == "on"
     assert cfg.chat.hf_repo == "huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF"
-    assert cfg.chat.model_file == "Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf"
+    assert cfg.chat.model_file == "Huihui-Qwen3.8-27B-abliterated-UD-DW-Q8_K_L.gguf"
     assert cfg.chat.mmproj_repo == "ggml-org/Qwen3.8-27B-GGUF"
     assert cfg.search_max_results == 8
     assert cfg.search_fetch_pages == 5

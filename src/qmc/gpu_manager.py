@@ -53,7 +53,8 @@ class GPUProfile:
 
 
 PROFILES: dict[str, GPUProfile] = {
-    # A100 80GB: 27B Q4 (~22GB incl. KV) + Qwen-Image bf16 fully resident (~33GB+) fit together.
+    # A100 80GB (main target): 27B Q8_K_L + Qwen-Image bf16 fully resident. The Q4_K_M numbers in
+    # docs/vram-measurements.md (~22GB chat) are historical; Q8_K_L is not yet measured (re-run qmc.bench).
     "a100_80": GPUProfile(
         key="a100_80",
         mode="Performance",

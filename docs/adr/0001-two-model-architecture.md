@@ -15,7 +15,7 @@ Phase 0 の調査で次が分かった（詳細: [phase0-research.md](../phase0-
 ## Decision
 
 1. **2モデル構成**にする
-   - Qwen3.8-27B (GGUF Q4_K_M + mmproj): Text / Vision / Reasoning
+   - Qwen3.8-27B (GGUF Q4_K_M + mmproj。※決定当時の構成。現在の既定 Chat は Q8_K_L): Text / Vision / Reasoning
    - Qwen-Image-2.1 (diffusers): Generation / Editing
 2. 27B は **llama-server をサブプロセスで起動**し、**OpenAI互換 HTTP API** で呼ぶ
 3. アプリ側の Chat クライアントは「OpenAI互換エンドポイント」に対して実装し、llama-server の起動管理（ローカルプロセス）とは分離する
