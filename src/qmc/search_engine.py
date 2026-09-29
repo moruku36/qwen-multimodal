@@ -98,6 +98,7 @@ def fallback_query(text: str) -> str:
 
 
 _APPEARANCE_NAME = re.compile(r"([一-龯]{2,6})(?:さん|ちゃん|君)|([一-龯]{4,6})を描")
+_APPEARANCE_SUBJECT = re.compile(r"([^\s、。,.!?！？]{2,30}?)の(?:画像|イラスト|絵|写真|姿|ビジュアル|キャラ)")
 _APPEARANCE_WORK = re.compile(r"\b[A-Z][A-Za-z0-9-]{2,}\b")
 _APPEARANCE_ERA = re.compile(r"千年血戦編|千年決戦編|[一-龯]{2,10}編|Thousand.Year Blood War", re.I)
 _APPEARANCE_UNSAFE = re.compile(
@@ -109,8 +110,14 @@ _APPEARANCE_UNSAFE = re.compile(
 
 def appearance_fallback_query(text: str) -> str:
     """Search visual identity without sending the requested adult scene to providers."""
-    name_match = _APPEARANCE_NAME.search(text)
-    name = next((group for group in name_match.groups() if group), "") if name_match else ""
+    subject = _APPEARANCE_SUBJECT.search(text)
+    if subject:
+        name_match = None
+        text_name = subject.group(1).replace("の", " ").strip()
+    else:
+        name_match = _APPEARANCE_NAME.search(text)
+        text_name = ""
+    name = next((group for group in name_match.groups() if group), "") if name_match else text_name
     work = next((word for word in _APPEARANCE_WORK.findall(text) if word.lower() != "nsfw"), "")
     era_match = _APPEARANCE_ERA.search(text)
     if not name:
