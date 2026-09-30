@@ -1,141 +1,55 @@
 # Qwen Multimodal Colab
 
-Google Colab で動く個人用の AI チャット画面です。**会話・画像の理解と生成・PDFや短い動画の読解・音声入力**を一つの画面で使えます。会話と画像は Google Drive に保存できます。
+[English](README.md) | [日本語](README.ja.md)
 
-> **English:** A personal Gradio chat app for Google Colab, designed for an A100 80GB. Qwen3.8-27B (GGUF Q8_K_L via llama.cpp) handles chat and vision; Qwen-Image-2.1 handles image creation and edits. It also supports web search, appearance lookup for named characters before image generation, a read-only research agent for GitHub repositories, PDFs, short videos, speech input and optional readout. Earlier core flows were tested on an A100 (with the previous Q4_K_M chat model); recent features and the Q8_K_L switch have CPU tests and still need Colab GPU verification.
+A personal Gradio chat application for Google Colab with Qwen chat/vision and image generation/editing, web search, read-only GitHub research, PDFs, short videos, speech input, and optional readout. The recommended setup is A100 80GB with Qwen3.8-27B Q8_K_L; that quantization change still needs GPU measurement.
 
-## まず使う
+## Start in Colab
 
-1. [Colab Notebook を開く](https://colab.research.google.com/github/moruku36/qwen-multimodal-colab/blob/main/Qwen-Multimodal-Colab.ipynb)。ランタイムは **A100 80GB 推奨**（推奨構成: A100 80GB + Qwen3.8-27B **Q8_K_L**）、L4 も選べます。
-2. Colab の「🔑 Secrets」に `HF_TOKEN` を登録します（任意ですが推奨）。検索用の `TAVILY_API_KEY` / `BRAVE_API_KEY` も任意です。
-3. Notebook の **Cell 1 → 4** を順番に実行し、最後に表示されるリンクから画面を開きます。初回はモデルのダウンロードに時間がかかります。
+1. Open the [Colab notebook](https://colab.research.google.com/github/moruku36/qwen-multimodal-colab/blob/main/Qwen-Multimodal-Colab.ipynb). A100 80GB is the recommended configuration.
+2. Optionally add `HF_TOKEN` and search-provider keys through Colab Secrets.
+3. Run cells 1–4 in order and open the resulting Gradio link.
 
-Notebook は起動用です。機能本体は [`src/qmc/`](src/qmc/) にあります。Colab 以外で画面を試す場合は、下の「開発・モックモード」を参照してください。
+Qwen3.8-27B Q8_K_L runs through llama.cpp for chat and vision with the official mmproj; Qwen-Image-2.1 runs through diffusers for image generation and editing. The implementation lives in `src/qmc/`.
 
-## 構成
+## Use
 
-推奨構成は **A100 80GB + Qwen3.8-27B Q8_K_L**。Chat / Vision 用の LLM と画像モデルを同時に GPU へ置き、画面（Gradio）はモデルを意識せずに使えます。
+Attach images, PDFs, short videos, or audio with the plus control. Use the microphone for speech input. Tools, generation settings, history, masks, and image versions are in the sidebar. GitHub URLs trigger a read-only research agent, bounded to a configurable step count; it does not write or execute repository code.
 
-| 用途 | モデル | 実行方法 |
-| --- | --- | --- |
-| Chat / Vision / 思考 | [`Huihui-Qwen3.8-27B-abliterated-UD-DW-Q8_K_L.gguf`](https://huggingface.co/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF)（画像入力は公式 [`mmproj-Qwen3.8-27B-Q8_0.gguf`](https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF)） | llama.cpp `llama-server` |
-| 画像の生成・編集 | [`Qwen/Qwen-Image-2.1`](https://huggingface.co/Qwen/Qwen-Image-2.1) | diffusers |
+If Google Drive is mounted, history and images are stored under `MyDrive/qwen-multimodal-colab/data/`; otherwise runtime storage is temporary.
 
-```mermaid
-flowchart LR
-    U(["ブラウザ"]) <--> UI["Gradio 画面"]
-    UI <--> C["Controller<br/>1ターンの進行"]
-    C --> R{"Router<br/>意図の判定"}
-    R -->|"Chat / Vision"| L["Qwen3.8-27B Q8_K_L<br/>llama-server"]
-    R -->|"Generate / Edit"| I["Qwen-Image-2.1<br/>diffusers"]
-    C -->|"検索 / 調査"| W[["Web検索<br/>GitHub"]]
-    C --> H[("SQLite → Google Drive<br/>履歴と画像")]
-```
+## Limits and verification
 
-詳しい図（1ターンの流れ・画像生成・チャット・GPU 配置・保存・モジュール構成）は [アーキテクチャ図](docs/architecture.md) にまとめています。
-
-## 画面の使い方
-
-入力欄が画面の中心です。**＋**から画像・PDF・動画・音声ファイルを添付し、**🎤**を押すと録音欄が開きます。生成設定・マスク・画像の系譜・検索設定は左の**「ツール」**にまとめました。チャット履歴も左側から選べます。
-
-| したいこと | 操作 |
+| Area | Documented default limit |
 | --- | --- |
-| 普通に質問する | 入力欄へ書いて送信。既定では Web 検索も行います |
-| 画像を作る | 「猫のイラストを描いて」のように頼む |
-| 固有キャラを描く | 「松本乱菊を描いて」のように頼むと、外見を検索してからプロンプトを作ります。公式画像を添付すると顔・髪などを優先して参照できます |
-| GitHub のリポジトリを読ませる | 質問に GitHub の URL を入れる（「[調査エージェント](#調査エージェント)」参照） |
-| 解説と画像を一度に頼む | 「松本乱菊について教えて。画像も生成して」— 検索した内容の解説（出典つき）と画像が**1つの返信**で返ります |
-| 画像を見せて調べてもらう | 画像を添付して「これは何？最新の情報も調べて」— 画像の内容を踏まえて Web 検索し、出典つきで答えます |
-| 画像を編集する | 画像を添付して「背景を夜景にして」。複数枚の参照も可能 |
-| 生成した4枚から選ぶ | 左の「ツール」→「画像生成・編集の設定」で「4枚」を選ぶ →「画像の系譜・バリエーション」で `var1`〜`var4` を選択 → 編集を指示 |
-| PDF・動画を読む | ファイルを添付して「要約して」「何が映ってる？」と聞く |
-| 声で入力する | **🎤**で録音欄を開いて録音後に「送信」。音声ファイルは **＋** からも添付可能 |
-| 回答を音声で聞く | 入力欄の下にある **🔊 読み上げ** をオンにして送信 |
-| 前の会話を開く | 左の「チャット履歴」から選ぶ。新規作成・削除も左側で操作 |
+| PDF | First 6 pages; 30MB |
+| Video | 30 seconds; 80MB; up to 8 frames; no video generation |
+| Image editing | Up to 10 references; masks do not guarantee unchanged outside pixels |
+| Speech input | Japanese small faster-whisper model loaded on CPU as needed |
+| Readout | Off by default; edge-tts sends reply text to an external service |
+| GPU evidence | Earlier A100 core flows used Q4_K_M; Q8_K_L and recent features still need GPU measurement |
 
-### 画像の編集と復元
-
-左の「ツール」→「画像の系譜・バリエーション」でサムネイルを選ぶと編集対象になります。`元に戻す` は元画像の画素を新しい版として保存し、画像モデルを再実行しません。「マスクで編集」で範囲を塗ることもできます。ただしローカル画像モデルのマスクは目安であり、範囲外の画素を完全に固定する機能ではありません。
-
-### どこに保存される？
-
-Drive をマウントした場合、履歴・生成画像は `MyDrive/qwen-multimodal-colab/data/` に保存されます。Drive が使えない場合はランタイム内に保存され、ランタイム終了時に消えます。左の「ツール」→「システム状態」で保存先を確認できます。会話が長くなっても、モデルへ送る文脈量だけを制限し、保存した履歴は消しません。
-
-## 調査エージェント
-
-チャットに GitHub の URL を含めると（例: `https://github.com/owner/repo を読んで改善点を教えて`）、モデルが回答前に自分でファイルツリーを見て、必要なソースを読み進めます（最大 14 回、`QMC_AGENT_MAX_STEPS`）。読んだファイルは回答末尾に一覧で出ます。思考モードと組み合わせると、読んだ内容をもとに深く考えて答えます。
-
-- `QMC_AGENT=auto|on|off`（既定 auto = GitHub URL があるときだけ。on は Web 検索・ページ取得のみでも常に有効）
-- `GITHUB_TOKEN` を設定すると private リポジトリも読め、API の回数制限（未認証は 60 回/時）が緩和されます
-- 読むだけで、書き込みや実行はしません。読んだ内容は「指示ではなくデータ」として扱います
-
-## 主な制限
-
-| 項目 | 制限・補足 |
-| --- | --- |
-| PDF | 既定で先頭6ページ、30 MBまで |
-| 動画 | 30秒・80 MBまで。最大8フレームを読解。動画生成は非対応 |
-| 画像の参照 | 編集で最大10枚。4枚の生成は順番に処理 |
-| 音声入力 | `faster-whisper` の日本語 `small` を CPU で必要時に読み込み |
-| 読み上げ | 既定オフ。`edge-tts` が外部サービスへ回答本文を送信するため、ネットワークが必要 |
-| 画像の既定 | 16:9・2048 帯・50 Steps（高画質優先。L4 は VRAM の都合で解像度帯が 1280 に制限）。速く作りたいときは「画像生成・編集の設定」で解像度帯や Steps を下げる |
-| GPU | メインは A100 80GB。旧版の基本機能は Chat が Q4_K_M のときに確認済みで、**Q8_K_L への変更後の A100 80GB 実測（VRAM・速度）は未実施**。新機能、L4、A100 40GB も実機検証が必要 |
-
-## 困ったとき
-
-| 症状 | 確認すること |
-| --- | --- |
-| 画面が開かない | Colab の Cell 4 を再実行。切断時は Cell 1 から再実行 |
-| 初回ロードが進まない | `HF_TOKEN`、Colab のディスク空き、ランタイムの GPU を確認 |
-| 画像生成でメモリ不足 | 左の「ツール」で解像度帯とバリエーションを下げ、必要なら「システム状態」からモデルを解放 |
-| PDF・動画が読めない | PDF は30 MB以内、動画は30秒・80 MB以内。動画には `ffmpeg` が必要 |
-| 音声入力・読み上げが動かない | Cell 2 を再実行。`faster-whisper` / `edge-tts` とネットワークを確認 |
-| 履歴が見えない | Drive のマウントと左の「ツール」→「システム状態」を確認 |
-
-詳しいエラー対処、GPU の測定値、モデル構成は [技術ガイド](TECHNICAL.md) にまとめています。
-
-## 設定と安全性
-
-既定は **Web 検索「常に」**、コンテンツ方針「開放」です。左の「ツール」→「検索・モード」で検索を「自動」や「オフ」に変更できます。検索すると質問に応じたクエリが外部サービスへ送信されます。未成年者の性的内容は扱いません。
-
-固有キャラの外見検索を止めるには Web検索を「オフ」に、検索結果による画像プロンプトの書き換えを止めるには「画像生成・編集の設定」でプロンプト最適化を「そのまま使う」にしてください。外見検索ではキャラ名・作品名・画風を調べ、成人向けの場面指定は検索クエリから外します。画像モデルは参照画像があるほうが本人に近づきます。
-
-| 環境変数 | 用途 |
-| --- | --- |
-| `QMC_DATA_DIR` | 履歴と画像の保存先 |
-| `QMC_WEB_SEARCH` | `on`（既定）/ `auto` / `off` |
-| `QMC_AGENT` / `GITHUB_TOKEN` | 調査エージェント（`auto` 既定 / `on` / `off`）と、private リポジトリ・回数制限用の GitHub トークン |
-| `QMC_CHAT_BASE_URL` / `QMC_CHAT_API_KEY` | 外部の Chat API を使う |
-| `QMC_IMAGE_BASE_URL` / `QMC_IMAGE_API_KEY` | 外部の画像 API を使う。形式は [Image HTTP API](docs/image-http-api.md) |
-| `QMC_TTS` / `QMC_TTS_VOICE` | 読み上げの初期設定と声 |
-| `QMC_AUTH_USER` / `QMC_AUTH_PASSWORD` | 共有 URL にログインを付ける |
-
-`SHARE=True` で発行される URL は公開されます。共有する場合は認証情報を Colab Secrets に設定してください。API キーやパスワードを Notebook に直接書かないでください。全設定は [技術ガイド](TECHNICAL.md) を参照してください。
-
-## 次の改善点（案）
-
-優先度の高い順です。
-
-1. **Q8_K_L 移行後の再測定（TODO）**: Chat を Q4_K_M から Q8_K_L に変更したため、A100 80GB で `python -m qmc.bench` を再実行し、ロード後・テキスト生成・Vision・Qwen-Image-2.1 同時常駐・画像生成・編集の VRAM を測り直す（現在の記録は Q4_K_M 時の値）。
-2. **実機検証**: 最近の新機能（プロンプト最適化の常時オン、既定ネガティブ＋CFG 2.0、16:9・2048 帯・50 Steps の既定（高画質優先。速さ優先なら UI で下げられる））は CPU テストのみ。A100 / L4 で画質・速度・VRAM を測り、[`docs/vram-measurements.md`](docs/vram-measurements.md) を更新する。
-3. **生成速度の短縮**: 画像プロンプトの書き直しのたびにチャットモデルと画像モデルが入れ替わる。書き直し結果のキャッシュ、または画像モデル常駐時は軽量な書き直しに切り替える。CFG 2.0 で 1 Step あたりが重くなった分は、Steps の既定を再調整する。
-4. **下書き → 本番の 2 段階生成**: 低解像度・少 Steps で下書きを出し、気に入ったものだけ同じ seed で高解像度に清書する（[`docs/phase0-research.md`](docs/phase0-research.md) の推奨フロー）。
-5. **書き直し後プロンプトの確認・再利用**: 最適化後のプロンプトを画像に紐づけて保存し、UI から見て手直しして再生成できるようにする。想像と違ったときの原因切り分けが楽になる。
-6. **ネガティブプロンプト・CFG の設定化**: UI には出さず、環境変数（例: `QMC_NEGATIVE_PROMPT` / `QMC_TRUE_CFG_SCALE`）で上書きできるようにする。
-7. **CI の追加**: `.github/workflows` が無く、テストとリンターは手元実行のみ。PR ごとに `pytest`（モックモード）を自動実行する。
-8. **大きなファイルの分割**: `controller.py`（約 830 行）と `ui.py`（約 730 行）は責務が混在している。画像・検索・添付の各ターン処理を別モジュールへ分ける。
-9. **ルーターの精度向上**: 画像生成・編集・通常チャットの判定はルールベース。誤判定の事例をテストに足し、曖昧なときはモデルに判定させる。
-10. **動画生成・長尺動画への対応**: 現在は 30 秒・最大 8 フレームの読解のみ。
-
-## 開発・モックモード
-
-GPU を使わず画面と機能の流れを確認できます。
+## Local mock mode
 
 ```bash
 pip install -r requirements-dev.txt
 PYTHONPATH=src python -m qmc --mock
 ```
 
-テストは `PYTHONPATH=src python -m pytest`。外部画像 API の開発用モックは `python scripts/image_http_stub.py --port 8013` で起動できます。設計の根拠は [`docs/adr/`](docs/adr/)、構成図は [`docs/architecture.md`](docs/architecture.md) にあります。
+`SHARE=True` creates a public URL; configure authentication through Colab Secrets when sharing. Web search sends queries to external services. Code is MIT-licensed; model weights have separate terms, including the documented non-commercial research terms for Qwen-Image-2.1.
 
-ソースコードは MIT License。モデルの重みは各モデルのライセンスに従います。Qwen-Image-2.1 は非商用研究用途のライセンスです。
+[Technical guide](TECHNICAL.md) · [Architecture](docs/architecture.md) · [VRAM measurements](docs/vram-measurements.md). The Japanese guide retains the full operating, troubleshooting, and improvement notes.
+
+
+## Contents
+
+- [TECHNICAL.md](TECHNICAL.md)
+- [data/](data)
+- [docs/](docs)
+- [scripts/](scripts)
+- [src/](src)
+- [tests/](tests)
+
+## Detailed documentation
+
+The [Japanese guide](README.ja.md) retains the complete original setup instructions, configuration, examples, project status, and limitations. Supporting documents keep their existing language.
