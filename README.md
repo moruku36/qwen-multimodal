@@ -2,11 +2,11 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
-A personal Gradio chat application for Google Colab with Qwen chat/vision and image generation/editing, web search, read-only GitHub research, PDFs, short videos, speech input, and optional readout. The recommended setup is A100 80GB with Qwen3.8-27B Q8_K_L; that quantization change still needs GPU measurement.
+A personal Gradio chat application for Google Colab with Qwen chat/vision and image generation/editing, web search, read-only GitHub research, PDFs, short videos, speech input, and optional readout. It requires an NVIDIA A100 (80GB recommended) with Qwen3.8-27B Q8_K_L; L4 and A100 40GB are not supported at the moment. That quantization change still needs GPU measurement.
 
 ## Start in Colab
 
-1. Open the [Colab notebook](https://colab.research.google.com/github/moruku36/qwen-multimodal-colab/blob/main/Qwen-Multimodal-Colab.ipynb). A100 80GB is the recommended configuration.
+1. Open the [Colab notebook](https://colab.research.google.com/github/moruku36/qwen-multimodal-colab/blob/main/Qwen-Multimodal-Colab.ipynb). **An A100 runtime is required** (A100 80GB recommended); L4 and A100 40GB are currently not supported.
 2. Optionally add `HF_TOKEN` and search-provider keys through Colab Secrets.
 3. Run cells 1–4 in order and open the resulting Gradio link.
 
