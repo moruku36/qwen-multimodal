@@ -83,12 +83,14 @@ flowchart TD
 | Text / Vision / Reasoning | [`huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF) `Huihui-Qwen3.8-27B-abliterated-UD-DW-Q8_K_L.gguf` + [公式 mmproj](https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF) `mmproj-Qwen3.8-27B-Q8_0.gguf` | llama.cpp `llama-server`（commit `4da6337` を固定ビルド） | GGUF Q8_K_L（旧: Q4_K_M） | Apache-2.0 |
 | Image Generation / Editing | [`Qwen/Qwen-Image-2.1`](https://huggingface.co/Qwen/Qwen-Image-2.1) | diffusers `QwenImage21Pipeline`（main `e0abab8` 固定） | A100: bf16 / L4: DiT int8 (torchao) | Qwen Research License（非商用研究用途） |
 
-**推奨構成**: メインの GPU は **A100 80GB**、Chat は **Qwen3.8-27B Q8_K_L**（Q4_K_M から変更）です。L4 / A100 40GB 向けのプロファイルもそのまま残していますが、Q8_K_L での動作は A100 80GB 以外では未確認です。Q8_K_L での VRAM は **未計測**（過去の実測は Q4_K_M 時の値。[`docs/vram-measurements.md`](docs/vram-measurements.md) 参照）。
+**推奨構成**: メインの GPU は **A100 80GB**、Chat は **Qwen3.8-27B Q8_K_L**（Q4_K_M から変更）です。**現在は A100 が必須で、L4 / A100 40GB は非対応です**。L4 / A100 40GB 向けのプロファイルはコード上に残していますが、Q8_K_L での動作は A100 80GB 以外では未確認・サポート外です。Q8_K_L での VRAM は **未計測**（過去の実測は Q4_K_M 時の値。[`docs/vram-measurements.md`](docs/vram-measurements.md) 参照）。
 
 **なぜ2モデル？** Qwen3.8-27B は画像・動画入力に対応したネイティブVLMです。Chat GGUF と公式 `mmproj` は別リポジトリから取得します。Vision 専用モデルを常駐させる必要がないため、VRAMを節約できる2モデル構成にしました。
 `11_qwen3_vl_image_judge.ipynb` は Google Drive 上で見つからず、内容を比較できていません（見つかれば `ChatBackend` を追加して3モデル構成にも拡張できます）。
 
 ## 4. A100 / L4 の違い
+
+> **現在のサポート対象は A100（80GB 推奨）のみ**です。以下の L4 / A100 40GB の列は、過去の設計値をコード上のプロファイルとして残しているものです（現在は非対応・未検証）。
 
 起動時に GPU を自動判定してプロファイルを選びます（`--profile` / `PROFILE` で上書き可）。
 
@@ -114,7 +116,7 @@ flowchart TD
 ### Colab（本番）
 
 1. `Qwen-Multimodal-Colab.ipynb` を Colab で開く（GitHub から開く or Drive にコピー）
-2. ［ランタイム］→［ランタイムのタイプを変更］→ **A100**（推奨）/ **L4**
+2. ［ランタイム］→［ランタイムのタイプを変更］→ **A100**（必須。L4 は現在非対応）
 3. 🔑 Secrets に `HF_TOKEN`（推奨）を登録し、Notebook からのアクセスを許可
 4. 4つのセルを上から実行 → 表示されたリンクを開く
 
@@ -312,8 +314,8 @@ MyDrive/qwen-multimodal-colab/
 | 動画を読めない / `ffmpeg` がない | 30秒・80MB以内か確認。Colab の `ffmpeg` / `ffprobe` を確認し、不足なら ffmpeg をインストール |
 | 読み上げに失敗する | Cell 2 を再実行し `edge-tts` を確認。外部音声サービスへの通信も確認 |
 | リモート画像APIが404を返す | `QMC_IMAGE_BASE_URL` の末尾に `/v1` を付けず、[契約](docs/image-http-api.md)の `/v1/images/generations` と `/v1/images/edits` をワーカー側で提供 |
-| 画像生成で `CUDA OOM` | 解像度帯・Steps を下げる。L4 は 1024 帯推奨。自動回復後も失敗する場合は「⏏ モデル解放」 |
-| L4 で返答が遅い | Chat ↔ Image のモデル切替中（ステータス表示を確認）。連続して画像を作ると切替が減る |
+| 画像生成で `CUDA OOM` | 解像度帯・Steps を下げる。自動回復後も失敗する場合は「⏏ モデル解放」 |
+| Colab が「Connecting」のまま進まない | ランタイムに GPU が割り当てられていない。［ランタイム］→［ランタイムのタイプを変更］で **A100** を選び、空きが無ければ時間をおいて再接続（L4 では動かないため切り替えない） |
 | 編集結果が元画像とほぼ同じ | seed を変える / 指示を具体的にする / 解像度帯を 768 にする |
 | 履歴が消えた | Drive マウントを確認（UI の「履歴」表示）。DB 破損時は自動退避・復元し、UI に通知 |
 | Colab が切断された | 再接続して Cell 1〜4 を再実行。最後に完了したターンまでは Drive から復元される |

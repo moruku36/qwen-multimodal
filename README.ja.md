@@ -2,7 +2,7 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
-Qwenの会話・画像理解・画像生成編集、Web検索、GitHub読み取り調査、PDF、短い動画、音声入力・読み上げをまとめたColab用Gradioアプリです。推奨はA100 80GBとQ8_K_Lで、量子化変更後のGPU実測は未完了です。
+Qwenの会話・画像理解・画像生成編集、Web検索、GitHub読み取り調査、PDF、短い動画、音声入力・読み上げをまとめたColab用Gradioアプリです。A100（80GB 推奨）が必須で、L4 と A100 40GB は現在非対応です。量子化変更後のGPU実測は未完了です。
 
 ---
 
@@ -14,7 +14,7 @@ Google Colab で動く個人用の AI チャット画面です。**会話・画�
 
 ## まず使う
 
-1. [Colab Notebook を開く](https://colab.research.google.com/github/moruku36/qwen-multimodal-colab/blob/main/Qwen-Multimodal-Colab.ipynb)。ランタイムは **A100 80GB 推奨**（推奨構成: A100 80GB + Qwen3.8-27B **Q8_K_L**）、L4 も選べます。
+1. [Colab Notebook を開く](https://colab.research.google.com/github/moruku36/qwen-multimodal-colab/blob/main/Qwen-Multimodal-Colab.ipynb)。ランタイムは **A100 が必須**（推奨構成: A100 80GB + Qwen3.8-27B **Q8_K_L**）です。L4 と A100 40GB は現在非対応です。
 2. Colab の「🔑 Secrets」に `HF_TOKEN` を登録します（任意ですが推奨）。検索用の `TAVILY_API_KEY` / `BRAVE_API_KEY` も任意です。
 3. Notebook の **Cell 1 → 4** を順番に実行し、最後に表示されるリンクから画面を開きます。初回はモデルのダウンロードに時間がかかります。
 
@@ -86,8 +86,8 @@ Drive をマウントした場合、履歴・生成画像は `MyDrive/qwen-multi
 | 画像の参照 | 編集で最大10枚。4枚の生成は順番に処理 |
 | 音声入力 | `faster-whisper` の日本語 `small` を CPU で必要時に読み込み |
 | 読み上げ | 既定オフ。`edge-tts` が外部サービスへ回答本文を送信するため、ネットワークが必要 |
-| 画像の既定 | 16:9・2048 帯・50 Steps（高画質優先。L4 は VRAM の都合で解像度帯が 1280 に制限）。速く作りたいときは「画像生成・編集の設定」で解像度帯や Steps を下げる |
-| GPU | メインは A100 80GB。旧版の基本機能は Chat が Q4_K_M のときに確認済みで、**Q8_K_L への変更後の A100 80GB 実測（VRAM・速度）は未実施**。新機能、L4、A100 40GB も実機検証が必要 |
+| 画像の既定 | 16:9・2048 帯・50 Steps（高画質優先）。速く作りたいときは「画像生成・編集の設定」で解像度帯や Steps を下げる |
+| GPU | メインは A100 80GB。旧版の基本機能は Chat が Q4_K_M のときに確認済みで、**Q8_K_L への変更後の A100 80GB 実測（VRAM・速度）は未実施**。新機能も実機検証が必要。L4 / A100 40GB は現在非対応 |
 
 ## 困ったとき
 
