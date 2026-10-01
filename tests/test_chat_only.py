@@ -35,13 +35,22 @@ def test_chat_only_keeps_image_understanding(tmp_path, make_png):
     assert set(app.manager.models) == {"chat"}
 
 
+def _text_chars(content) -> int:
+    """Characters of text payload in a message content (plain string or list of content parts)."""
+    if isinstance(content, str):
+        return len(content)
+    return sum(len(part["text"]) for part in content if part.get("type") == "text")
+
+
 def test_long_recent_message_keeps_more_text_with_total_cap():
     text = "A" * 5000 + "END"
     messages = build_messages([ContextMessage("user", text)], max_text_chars=14000)
-    assert len(messages[-1]["content"]) == len(text)
+    assert _text_chars(messages[-1]["content"]) == len(text)
+    assert messages[-1]["content"] == text
     many = [ContextMessage("user", str(n) * 8000) for n in range(10)]
     bounded = build_messages(many, max_text_chars=14000)
-    assert sum(len(str(item["content"])) for item in bounded[1:]) <= 14000
+    # Consecutive user messages are merged into content parts, so count only the text payloads.
+    assert sum(_text_chars(item["content"]) for item in bounded[1:]) <= 14000
 
 
 def test_chat_notebook_only_prefetches_chat():
