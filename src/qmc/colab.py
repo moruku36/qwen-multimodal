@@ -13,6 +13,7 @@ import os
 import shutil
 import socket
 import subprocess
+import threading
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -316,6 +317,92 @@ def shutdown_previous() -> None:
         import gradio as gr  # noqa: PLC0415
 
         gr.close_all()
+
+
+def shutdown_runtime(cleanup_timeout: float = 60) -> None:
+    """Best-effort app/Drive cleanup, then request Colab VM unassignment.
+
+    Only call when the user is done or startup failed, never after a successful
+    nonblocking launch. A daemon worker bounds waiting for stuck model/Drive I/O;
+    timed-out or failed writes may be lost. A dead kernel cannot run this helper.
+    Outside Colab, only stop the app (there is no runtime to unassign).
+    """
+    if cleanup_timeout <= 0:
+        raise ValueError("cleanup_timeout must be positive")
+    is_colab = in_colab()
+
+    def cleanup():
+        try:
+            prev = _get_current_app()
+            if prev is not None:
+                with contextlib.suppress(Exception):
+                    prev.controller.cancel()
+            shutdown_previous()
+        except Exception as exc:
+            print(f"⚠️ アプリの停止処理に失敗しました: {exc}")
+        finally:
+            if is_colab:
+                try:
+                    from google.colab import drive  # noqa: PLC0415
+
+                    drive.flush_and_unmount(timeout_ms=30_000)
+                except Exception as exc:
+                    print(f"⚠️ Drive の同期に失敗しました。未同期のデータは失われる可能性があります: {exc}")
+
+    worker = threading.Thread(target=cleanup, name="qmc-shutdown", daemon=True)
+    try:
+        worker.start()
+        worker.join(timeout=cleanup_timeout)
+        if worker.is_alive():
+            print("⚠️ 停止処理がタイムアウトしました。未保存・未同期のデータは失われる可能性があります。")
+    finally:
+        if is_colab:
+            from google.colab import runtime  # noqa: PLC0415
+
+            print("Colab のセッション終了を要求します。接続が切れるまでお待ちください。")
+            try:
+                runtime.unassign()
+            except Exception:
+                print("⚠️ 自動終了を確認できません。［ランタイム］→［セッションを終了］を実行してください。")
+                raise
+        else:
+            print("Colab 外のため、ランタイムの割り当て解除は行いません。")
+
+
+def show_shutdown_button() -> None:
+    """Display a fresh, disarmed shutdown control; running the cell never stops the UI."""
+    import ipywidgets as widgets  # noqa: PLC0415
+    from IPython.display import display  # noqa: PLC0415
+
+    confirm = widgets.Checkbox(
+        value=False,
+        description="生成処理が終了し、必要なファイルを保存しました（未同期データは失われる可能性があります）",
+        indent=False,
+        layout=widgets.Layout(width="auto"),
+    )
+    button = widgets.Button(description="セッションを終了", button_style="danger", disabled=True)
+    result = widgets.Output()
+
+    def enable(change):
+        button.disabled = not change["new"]
+
+    def stop(_):
+        # Check again server-side: stale/repeated click events must not disconnect twice.
+        if button.disabled or not confirm.value:
+            return
+        button.disabled = True
+        confirm.value = False
+        confirm.disabled = True
+        with result:
+            try:
+                shutdown_runtime()
+            except Exception as exc:
+                print(f"終了処理に失敗しました。［ランタイム］→［セッションを終了］を実行してください: {exc}")
+                confirm.disabled = False
+
+    confirm.observe(enable, names="value")
+    button.on_click(stop)
+    display(widgets.VBox([confirm, button, result]))
 
 
 def port_is_free(port: int, host: str = "0.0.0.0") -> bool:
