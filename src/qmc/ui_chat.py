@@ -34,8 +34,8 @@ def build_ui(app) -> gr.Blocks:
 
     def status():
         loaded = ", ".join(app.manager.status()["loaded"]) or "none"
-        return (f"**GPU:** {app.gpu.name} �E **VRAM:** {memory_snapshot().summary()} �E "
-                f"**Loaded:** {loaded} �E **Search:** {app.search_label}")
+        return (f"**GPU:** {app.gpu.name} · **VRAM:** {memory_snapshot().summary()} · "
+                f"**Loaded:** {loaded} · **Search:** {app.search_label}")
 
     def choose(sid):
         return sid, _history(app, sid)
@@ -109,7 +109,7 @@ def build_ui(app) -> gr.Blocks:
             status_md = gr.Markdown(status())
         chatbot = gr.Chatbot(value=_history(app, sid.value), type="messages", height=550)
         composer = gr.MultimodalTextbox(file_types=["image", ".pdf", ".mp4", ".mov", ".mkv"],
-                                         placeholder="Message or attach an image�c", show_label=False)
+                                         placeholder="Message or attach an image…", show_label=False)
         with gr.Row():
             mic = gr.Audio(sources=["microphone"], type="filepath", label="Voice input")
             stop = gr.Button("Stop", size="sm")

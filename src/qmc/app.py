@@ -35,7 +35,7 @@ class App:
     @property
     def search_label(self) -> str:
         search = self.controller.search
-        return search.provider_name if search and search.available else "����"
+        return search.provider_name if search and search.available else "無効"
 
     @property
     def image_label(self) -> str:
