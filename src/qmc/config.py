@@ -70,6 +70,7 @@ class ImageModelConfig:
 
 @dataclass
 class AppConfig:
+    chat_only: bool = False  # Separate Colab launcher; never register an image-generation backend.
     data_dir: Path = field(default_factory=lambda: Path("data"))
     # Local working copy of the SQLite DB. SQLite on the Drive FUSE mount is unsafe, so the DB
     # lives on local disk and is mirrored to ``data_dir`` after every turn (see ADR-0002).

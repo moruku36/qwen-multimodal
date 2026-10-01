@@ -246,15 +246,18 @@ def launch(
     port: int = 7860,
     profile: str | None = None,
     web_search: str | None = None,
+    chat_only: bool = False,
 ):
     """Cell 4: build the app and start Gradio. Returns the App."""
     from .app import build_app  # noqa: PLC0415
     from .config import load_config  # noqa: PLC0415
-    from .ui import build_ui  # noqa: PLC0415
-    from .ui import launch as ui_launch  # noqa: PLC0415
+    if chat_only:
+        from .ui_chat import build_ui, launch as ui_launch  # noqa: PLC0415
+    else:
+        from .ui import build_ui, launch as ui_launch  # noqa: PLC0415
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    cfg = load_config(mock=mock, share=share, server_port=port)
+    cfg = load_config(mock=mock, share=share, server_port=port, chat_only=chat_only)
     if profile:
         cfg.gpu_profile_override = profile
     if web_search:

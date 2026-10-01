@@ -6,6 +6,12 @@ A personal Gradio chat application for Google Colab with Qwen chat/vision and im
 
 ## Start in Colab
 
+For the lightweight Q8 chat/vision workflow on an A100 80GB, open the
+[chat-only notebook](Qwen-Q8-Chat-Colab.ipynb). It keeps web search and CPU speech
+recognition while omitting image generation and editing. See the
+[Q8-first roadmap](docs/chat-only-roadmap.md) for validation status and the later
+BF16 comparison. The original notebook below remains the full multimodal workflow.
+
 1. Open the [Colab notebook](https://colab.research.google.com/github/moruku36/qwen-multimodal-colab/blob/main/Qwen-Multimodal-Colab.ipynb). **An A100 runtime is required** (A100 80GB recommended); L4 and A100 40GB are currently not supported.
 2. Optionally add `HF_TOKEN` and search-provider keys through Colab Secrets.
 3. Run cells 1–4 in order and open the resulting Gradio link.

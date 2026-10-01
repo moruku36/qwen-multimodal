@@ -91,7 +91,7 @@ class ChatController:
         manager: ModelManager,
         chat: ChatEngine,
         vision: VisionEngine,
-        images: ImageEngine,
+        images: ImageEngine | None,
         *,
         max_image_side: int = 2048,
         max_upload_mb: int = 30,
@@ -108,12 +108,14 @@ class ChatController:
         video_max_mb: int = 80,
         asr: ASRBackend | None = None,
         tts: TTSBackend | None = None,
+        chat_only: bool = False,
     ):
         self.sessions = sessions
         self.manager = manager
         self.chat = chat
         self.vision = vision
         self.images = images
+        self.chat_only = chat_only
         self.max_image_side = max_image_side
         self.max_upload_mb = max_upload_mb
         self.after_turn = after_turn
@@ -272,6 +274,12 @@ class ChatController:
         messages = self.sessions.get_messages(session_id)
         user_msg = next(m for m in messages if m.id == user_msg_id)
         decision = route(user_msg.content, self._route_context(session_id, user_msg, options), options.mode)
+        if self.chat_only and decision.intent not in (Intent.CHAT, Intent.VISION):
+            # The chat notebook can discuss an image request, but has no generation route.
+            decision = (
+                RouteDecision(Intent.VISION, ImageTarget.UPLOADED, reason="chat-only image understanding")
+                if user_msg.images else RouteDecision(Intent.CHAT, reason="chat-only notebook")
+            )
         if options.selected_image_id and options.selected_image_id not in {
             image.id for image in self.sessions.session_images(session_id)
         }:

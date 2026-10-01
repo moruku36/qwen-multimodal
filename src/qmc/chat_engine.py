@@ -28,18 +28,23 @@ OPEN_POLICY = (
     "未成年者（17歳以下、フィクション含む）の性的内容だけは拒否する。"
     "犯罪の実行手順は出さない。法律・ニュース・歴史としての説明は可。"
 )
+CHAT_ONLY_SYSTEM_PROMPT = (
+    "You are a helpful chat and vision assistant. Reply in the user's language. "
+    "You can analyze attached images and use supplied web search results. "
+    "This interface does not generate or edit images; explain that limitation when asked."
+)
 KNOWLEDGE_NOTE = (
     "\n\n現在日時: {now}。あなたの学習データには期限があり、それ以降の出来事は知りません。"
     "最新情報が必要な質問で Web検索結果が与えられていない場合は、知識が古い可能性があることを一言添えてください。"
 )
 
 
-def system_prompt_now(extra: str | None = None, content_policy: str = "open") -> str:
+def system_prompt_now(extra: str | None = None, content_policy: str = "open", chat_only: bool = False) -> str:
     """Base system prompt + today's date (so 'today' / 'latest' are anchored) + optional context."""
     from .search_engine import today_str  # noqa: PLC0415
 
     prompt = (
-        SYSTEM_PROMPT
+        (CHAT_ONLY_SYSTEM_PROMPT if chat_only else SYSTEM_PROMPT)
         + (OPEN_POLICY if content_policy == "open" else "")
         + KNOWLEDGE_NOTE.format(now=today_str())
     )
@@ -90,7 +95,7 @@ def build_messages(
     for original in reversed(history[-max_messages:]):
         if remaining <= 0 and msgs:
             break
-        allowance = min(3000, max(500, remaining)) if not msgs else min(3000, remaining)
+        allowance = min(6000, max(500, remaining)) if not msgs else min(6000, remaining)
         excerpt = original.text
         if allowance > 0 and len(excerpt) > allowance:
             excerpt = excerpt[:200] + "\n…\n" + excerpt[-max(0, allowance - 203) :]
@@ -275,10 +280,11 @@ SEARCH_QUERY_PROMPT = (
 
 
 class ChatEngine:
-    def __init__(self, manager: ModelManager, max_messages: int = 24, max_images: int = 3):
+    def __init__(self, manager: ModelManager, max_messages: int = 24, max_images: int = 3, chat_only: bool = False):
         self.manager = manager
         self.max_messages = max_messages
         self.max_images = max_images
+        self.chat_only = chat_only
 
     def stream(
         self,
@@ -292,7 +298,7 @@ class ChatEngine:
     ) -> Iterator[ChatDelta]:
         messages = build_messages(
             history,
-            system_prompt=system_prompt_now(system_extra[:extra_chars] if system_extra else None, content_policy),
+            system_prompt=system_prompt_now(system_extra[:extra_chars] if system_extra else None, content_policy, self.chat_only),
             max_messages=self.max_messages,
             max_images=self.max_images if extra_images else min(self.max_images, 1),
             extra_images=extra_images,

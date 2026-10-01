@@ -99,7 +99,9 @@ def build_app(cfg: AppConfig, gpu: GPUInfo | None = None) -> App:
         chat_model = RemoteChatModel(cfg) if cfg.chat.remote_base_url else LlamaServerModel(cfg, profile)
         manager.register(chat_model)
 
-    if cfg.image.remote_base_url:
+    if cfg.chat_only:
+        pass
+    elif cfg.image.remote_base_url:
         from .backends.image_http import HttpImageModel
 
         manager.register(HttpImageModel(cfg.image.remote_base_url, cfg.image.remote_api_key))
@@ -112,7 +114,7 @@ def build_app(cfg: AppConfig, gpu: GPUInfo | None = None) -> App:
 
         manager.register(QwenImageModel(cfg, profile))
 
-    chat = ChatEngine(manager, cfg.max_context_messages, cfg.max_context_images)
+    chat = ChatEngine(manager, cfg.max_context_messages, cfg.max_context_images, cfg.chat_only)
     from .asr import MockASR, WhisperASR
     from .tts import EdgeTTS, MockTTS
 
@@ -121,7 +123,7 @@ def build_app(cfg: AppConfig, gpu: GPUInfo | None = None) -> App:
         manager,
         chat,
         VisionEngine(chat),
-        ImageEngine(manager, profile, cfg.image.default_band, cfg.image.default_steps, cfg.image.max_band),
+        None if cfg.chat_only else ImageEngine(manager, profile, cfg.image.default_band, cfg.image.default_steps, cfg.image.max_band),
         max_image_side=cfg.max_image_side,
         max_upload_mb=cfg.max_upload_mb,
         after_turn=store.sync,
@@ -137,5 +139,6 @@ def build_app(cfg: AppConfig, gpu: GPUInfo | None = None) -> App:
         video_max_mb=cfg.video_max_mb,
         asr=MockASR() if cfg.mock else WhisperASR(cfg.asr_model, cfg.asr_device),
         tts=MockTTS() if cfg.mock else EdgeTTS(cfg.tts_voice),
+        chat_only=cfg.chat_only,
     )
     return App(cfg, gpu, profile, store, sessions, manager, controller)
