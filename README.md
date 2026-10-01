@@ -53,3 +53,7 @@ PYTHONPATH=src python -m qmc --mock
 ## Detailed documentation
 
 The [Japanese guide](README.ja.md) retains the complete original setup instructions, configuration, examples, project status, and limitations. Supporting documents keep their existing language.
+
+## Image generation time and Colab units
+
+Image controls now start at the configured **1024 band / 40 steps on A100 / one image** instead of silently forcing 2048/50. The visible **legacy-quality 2048/50** preset remains available; **draft 768/20** trades detail and fidelity for less work. No GPU speedup or CU savings have been measured. Progress shows per-image elapsed time, and completion separates preparation from image processing. See the [performance review and verification limits](docs/image-performance.md). Stop/unload does not end the Colab runtime; use the session shutdown control when finished.

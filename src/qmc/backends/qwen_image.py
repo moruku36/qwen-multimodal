@@ -155,6 +155,8 @@ class QwenImageModel:
     def generate(
         self, request: ImageRequest, progress: ProgressFn | None = None, cancel: threading.Event | None = None
     ) -> Image.Image:
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
         import torch  # noqa: PLC0415
 
         pipe = self._pipe
@@ -174,7 +176,9 @@ class QwenImageModel:
             if progress:
                 progress(step + 1, request.steps)
             if cancel is not None and cancel.is_set():
-                p._interrupt = True
+                # The pipeline's interrupt flag only skips the remaining steps;
+                # it still decodes the discarded image. Abort before that work.
+                raise Cancelled()
             return cb_kwargs
 
         prompt = request.prompt
@@ -207,9 +211,23 @@ class QwenImageModel:
         if request.negative_prompt and request.true_cfg_scale > 1.0:
             kwargs.update(negative_prompt=request.negative_prompt, true_cfg_scale=request.true_cfg_scale)
 
-        free_cuda_memory()
-        with torch.inference_mode():
-            result = pipe(**kwargs).images[0]
+        # Keep reusable CUDA allocator blocks on the steady-state path. Explicit
+        # cleanup belongs to unload / OOM recovery, not every generated image.
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+        try:
+            with torch.inference_mode():
+                result = pipe(**kwargs).images[0]
+        except BaseException:
+            # Diffusers calls this only after a successful pipeline invocation.
+            # Restore offload hooks and release stateful caches on failure too,
+            # including callback cancellation, before the manager can retry.
+            try:
+                if hasattr(pipe, "maybe_free_model_hooks"):
+                    pipe.maybe_free_model_hooks()
+            except BaseException:
+                log.warning("Image pipeline cleanup failed after interrupted inference", exc_info=True)
+            raise
         if cancel is not None and cancel.is_set():
             raise Cancelled()
         return flatten_alpha(result)

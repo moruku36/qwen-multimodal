@@ -347,7 +347,10 @@ def test_appearance_search_failure_shows_reason(app):
         "ブリーチの松本乱菊の画像を生成して",
         options=TurnOptions(web_search="on", image=ImageOptions(steps=1)),
     )
-    assert "外見を確認できませんでした（外見の検索結果が0件でした）" in app.sessions.get_messages(sid)[-1].content
+    assert (
+        "外見を確認できませんでした（外見の検索結果が0件でした）"
+        in app.sessions.get_messages(sid)[-1].content
+    )
     assert any("外見の検索結果を取得できませんでした" in str(e.data) for e in events if e.kind == "status")
 
 
@@ -365,7 +368,9 @@ def test_compound_request_answers_then_generates_in_one_message(app):
     messages = [m for m in app.sessions.get_messages(sid) if m.role == "assistant"]
     assert len(messages) == 1
     content = messages[0].content
-    assert content.index("検索結果によると") < content.index("画像を生成しました")  # text first, then image note
+    assert content.index("検索結果によると") < content.index(
+        "画像を生成しました"
+    )  # text first, then image note
     assert "".join(kinds(events, "text")).count("検索結果によると") == 1  # no duplicate streaming
 
 
@@ -388,3 +393,35 @@ def test_plain_vision_question_does_not_search(app, make_png):
     sid = app.sessions.create_session()
     run(app, sid, "この画像に何が写っていますか？", [str(make_png())], options=TurnOptions(web_search="on"))
     assert app.controller.search.provider.queries == []
+
+
+def test_variation_durations_are_per_image_not_cumulative(app, monkeypatch):
+    from types import SimpleNamespace
+
+    sid = app.sessions.create_session()
+    image = app.manager.get("image")
+    generate = image.generate
+
+    clock = [100.0]
+    # Replace only the controller clock; do not alter queue/thread timers.
+    monkeypatch.setattr("qmc.controller.time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def delayed(*args, **kwargs):
+        clock[0] += 10
+        return generate(*args, **kwargs)
+
+    monkeypatch.setattr(image, "generate", delayed)
+    events = run(
+        app,
+        sid,
+        "猫を描いて",
+        options=TurnOptions(
+            image=ImageOptions(steps=1, variations=2), web_search="off", prompt_rewrite="off"
+        ),
+    )
+    generations = app.sessions.generations(sid)
+    assert len(generations) == 2
+    # Second image's stored time must cover only its own call, not the whole batch.
+    assert [g["duration_s"] for g in generations] == [10.0, 10.0]
+    assert any("経過" in str(e.data) for e in events if e.kind == "status")
+    assert "前処理" in "".join(kinds(events, "text"))

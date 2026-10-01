@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from PIL import Image
 
-from .backends.base import ImageRequest, ProgressFn
+from .backends.base import Cancelled, ImageRequest, ProgressFn
 from .gpu_manager import GPUProfile
 from .model_manager import IMAGE, ModelManager
 
@@ -66,10 +66,19 @@ class ImageOptions:
 
 
 class ImageEngine:
-    def __init__(self, manager: ModelManager, profile: GPUProfile, default_band: int = 1024):
+    def __init__(
+        self,
+        manager: ModelManager,
+        profile: GPUProfile,
+        default_band: int = 1024,
+        default_steps: int | None = None,
+        max_band: int | None = None,
+    ):
         self.manager = manager
         self.profile = profile
-        self.default_band = default_band
+        self.max_band = clamp_band(max_band or profile.image_max_band, profile)
+        self.default_band = min(clamp_band(default_band, profile), self.max_band)
+        self.default_steps = max(1, min(int(default_steps or profile.image_default_steps), 100))
 
     def build_request(
         self,
@@ -80,8 +89,8 @@ class ImageEngine:
     ) -> ImageRequest:
         if not prompt or not prompt.strip():
             raise ValueError("プロンプトが空です。")
-        band = clamp_band(options.band or self.default_band, self.profile)
-        steps = int(options.steps or self.profile.image_default_steps)
+        band = min(clamp_band(options.band or self.default_band, self.profile), self.max_band)
+        steps = int(options.steps or self.default_steps)
         seed = choose_seed(options.seed, avoid_seeds)
         negative = options.negative_prompt
         if negative is None:
@@ -118,4 +127,34 @@ class ImageEngine:
     def run(
         self, request: ImageRequest, progress: ProgressFn | None = None, cancel: threading.Event | None = None
     ) -> Image.Image:
-        return self.manager.run(IMAGE, lambda model: model.generate(request, progress, cancel))
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+
+        def generate(model):
+            if cancel is not None and cancel.is_set():
+                raise Cancelled()
+            return model.generate(request, progress, cancel)
+
+        return self.manager.run(IMAGE, generate)
+
+
+def preset_values(name: str, engine: ImageEngine) -> tuple[int, int, int]:
+    """Explicit quality/workload choices; never change model, CFG or prompt rewriting."""
+    choices = {
+        "configured": (engine.default_band, engine.default_steps),
+        "draft": (768, 20),
+        "quality": (2048, 50),
+    }
+    band, steps = choices[name]
+    return min(band, engine.max_band), steps, 1
+
+
+def workload_summary(band: int, steps: int, variations: int) -> str:
+    """A workload description, deliberately not a fabricated wall-clock/CU estimate."""
+    return (
+        f"{int(band)}帯 / {int(steps)} steps / {int(variations)}枚（順次生成）\n\n"
+        "高解像度・多いSteps・複数枚ほど処理が重くなります。"
+        "下書きは細部・文字・指示の再現性が落ちる場合があります。"
+        "初回ロード・検索・プロンプト最適化は別途時間がかかります。"
+        "所要時間・CU消費はGPU実測前のため未推定です。"
+    )

@@ -313,3 +313,22 @@ def test_shutdown_control_requires_fresh_confirmation(monkeypatch):
     assert confirm.disabled and button.disabled
     colab.show_shutdown_button()
     assert not displayed[-1][0].value and displayed[-1][1].disabled
+
+
+def test_image_prefetch_reuses_loader_cache(monkeypatch, tmp_path):
+    import sys
+    from types import SimpleNamespace
+
+    from qmc import colab
+    from qmc.config import load_config
+
+    calls = []
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+    monkeypatch.setattr("qmc.backends.llama_server.download_hf_file", lambda *a: None)
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(snapshot_download=lambda *args, **kwargs: calls.append((args, kwargs))),
+    )
+    colab.prefetch_models(chat=False)
+    assert calls == [((load_config().image.model_id,), {"cache_dir": str(load_config().hf_cache_dir)})]

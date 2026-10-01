@@ -234,7 +234,9 @@ def prefetch_models(chat: bool = True, image: bool = True) -> None:
             download_hf_file(mmproj_repo, cfg.chat.mmproj_file, cfg.hf_cache_dir)
     if image and not cfg.image.remote_base_url:
         print("↓", cfg.image.model_id)
-        snapshot_download(cfg.image.model_id)
+        snapshot_download(
+            cfg.image.model_id, cache_dir=str(cfg.hf_cache_dir) if cfg.hf_cache_dir else None
+        )
     print("✅ ダウンロード完了")
 
 
