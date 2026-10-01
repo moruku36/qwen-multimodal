@@ -91,7 +91,7 @@ class ChatController:
         manager: ModelManager,
         chat: ChatEngine,
         vision: VisionEngine,
-        images: ImageEngine,
+        images: ImageEngine | None,
         *,
         max_image_side: int = 2048,
         max_upload_mb: int = 30,
@@ -108,12 +108,14 @@ class ChatController:
         video_max_mb: int = 80,
         asr: ASRBackend | None = None,
         tts: TTSBackend | None = None,
+        chat_only: bool = False,
     ):
         self.sessions = sessions
         self.manager = manager
         self.chat = chat
         self.vision = vision
         self.images = images
+        self.chat_only = chat_only
         self.max_image_side = max_image_side
         self.max_upload_mb = max_upload_mb
         self.after_turn = after_turn
@@ -156,7 +158,7 @@ class ChatController:
             return str(self.tts.synthesize(spoken, output))
         except Exception as exc:
             log.warning("TTS failed: %s", exc)
-            self.last_tts_error = f"読み上げをスキップしました: {exc}"
+            self.last_tts_error = f"�ǂݏグ���X�L�b�v���܂���: {exc}"
             return None
 
     def handle(
@@ -171,7 +173,7 @@ class ChatController:
         text = (text or "").strip()
         files = [f for f in (files or []) if f]
         if not text and not files:
-            yield Event("error", "メッセージが空です。テキストを入力するか画像を添付してください。")
+            yield Event("error", "���b�Z�[�W����ł��B�e�L�X�g����͂��邩�摜��Y�t���Ă��������B")
             return
 
         uploads: list[tuple[Any, dict]] = []
@@ -212,7 +214,7 @@ class ChatController:
                     )
                 elif suffix in {".wav", ".mp3", ".m4a", ".webm", ".ogg"}:
                     if self.asr is None:
-                        raise ValueError("音声認識のパッケージがありません")
+                        raise ValueError("�����F���̃p�b�P�[�W������܂���")
                     transcript = self.asr.transcribe(path)
                     if transcript:
                         transcripts.append(transcript)
@@ -234,18 +236,18 @@ class ChatController:
                         meta.update({"sliced": True, "bands": len(slices), "slice_paths": rel_paths})
                     uploads.append((image, meta))
                 else:
-                    raise ValueError(f"未対応のファイル形式です: {path.name}")
+                    raise ValueError(f"���Ή��̃t�@�C���`���ł�: {path.name}")
             except (InvalidImageError, ValueError, OSError, RuntimeError) as exc:
-                if "音声認識のパッケージがありません" in str(exc):
+                if "�����F���̃p�b�P�[�W������܂���" in str(exc):
                     yield Event("status", str(exc))
                 yield Event("error", str(exc))
         if transcripts:
             text = "\n".join([*transcripts, text] if text else transcripts).strip()
-            yield Event("status", f"🎙 文字起こし: {' / '.join(transcripts)}")
+            yield Event("status", f"?? �����N����: {' / '.join(transcripts)}")
         if not text and uploads and all("pdf_page" in meta for _, meta in uploads):
-            text = "この資料の内容をページ順に要約し、表や数字は省略せず書いてください。"
+            text = "���̎����̓��e���y�[�W���ɗv�񂵁A�\�␔���͏ȗ����������Ă��������B"
         if not text and any(meta.get("video") for _, meta in uploads):
-            text = "この動画で何が起きているか、時系列で説明してください。"
+            text = "���̓���ŉ����N���Ă��邩�A���n��Ő������Ă��������B"
         if not text and not uploads:
             return
 
@@ -258,7 +260,7 @@ class ChatController:
         """Drop the last answer and answer the last user message again."""
         last = self.sessions.last_user_message(session_id)
         if last is None:
-            yield Event("error", "再生成するメッセージがありません。")
+            yield Event("error", "�Đ������郁�b�Z�[�W������܂���B")
             return
         later = [m for m in self.sessions.get_messages(session_id) if m.id > last.id]
         if later:
@@ -272,10 +274,16 @@ class ChatController:
         messages = self.sessions.get_messages(session_id)
         user_msg = next(m for m in messages if m.id == user_msg_id)
         decision = route(user_msg.content, self._route_context(session_id, user_msg, options), options.mode)
+        if self.chat_only and decision.intent not in (Intent.CHAT, Intent.VISION):
+            # The chat notebook can discuss an image request, but has no generation route.
+            decision = (
+                RouteDecision(Intent.VISION, ImageTarget.UPLOADED, reason="chat-only image understanding")
+                if user_msg.images else RouteDecision(Intent.CHAT, reason="chat-only notebook")
+            )
         if options.selected_image_id and options.selected_image_id not in {
             image.id for image in self.sessions.session_images(session_id)
         }:
-            decision.warnings.append("選択した画像が見つからないため、最新の画像を使います")
+            decision.warnings.append("�I�������摜��������Ȃ����߁A�ŐV�̉摜���g���܂�")
         self.sessions.update_message(user_msg_id, intent=decision.intent.value)
         yield Event("route", decision)
         if blocks_minor_sexual_request(user_msg.content):
@@ -301,10 +309,10 @@ class ChatController:
             else:
                 yield from self._image(session_id, user_msg, decision, options)
         except Cancelled:
-            yield Event("status", "停止しました")
+            yield Event("status", "��~���܂���")
         except Exception as exc:
             log.exception("turn failed")
-            msg = f"エラー: {exc}"
+            msg = f"�G���[: {exc}"
             self.sessions.add_message(
                 session_id, "assistant", msg, intent=decision.intent.value, meta={"error": True}
             )
@@ -404,12 +412,12 @@ class ChatController:
             session_id, user_msg, ImageTarget.SELECTED, options.selected_image_id
         )
         if not selected:
-            raise ValueError("復元する画像がありません")
+            raise ValueError("��������摜������܂���")
         current = selected[0]
         root = self.sessions.lineage(current.id)[0]
-        summary = f"元画像に戻しました（rev{current.revision + 1}）"
+        summary = f"���摜�ɖ߂��܂����irev{current.revision + 1}�j"
         message_id = self.sessions.add_message(
-            session_id, "assistant", summary, intent=Intent.RESTORE.value, model="コピー"
+            session_id, "assistant", summary, intent=Intent.RESTORE.value, model="�R�s�["
         )
         record = self.sessions.add_image(
             session_id,
@@ -461,7 +469,7 @@ class ChatController:
         policy = options.content_policy or self.content_policy
         params = ChatParams(thinking=options.thinking)
         if not self.manager.is_loaded(CHAT):
-            yield Event("status", "Qwen3.8-27B をロード中…（初回・モデル切替時は1〜2分かかります）")
+            yield Event("status", "Qwen3.8-27B �����[�h���c�i����E���f���ؑ֎���1?2��������܂��j")
 
         if decision.intent is Intent.VISION:
             records = self._resolve_targets(
@@ -477,7 +485,7 @@ class ChatController:
                             ContextImage(
                                 f"{record.id}-frame-{index}",
                                 str(self.sessions.data_dir / rel),
-                                f"{record.caption} フレーム {index}",
+                                f"{record.caption} �t���[�� {index}",
                             )
                         )
                 elif record.meta.get("slice_paths"):
@@ -487,13 +495,13 @@ class ChatController:
                             ContextImage(
                                 f"{record.id}-slice-{index}",
                                 str(self.sessions.data_dir / rel),
-                                f"{record.caption} 分割 {index}",
+                                f"{record.caption} ���� {index}",
                             )
                         )
                 else:
                     targets.append(self._ctx_image(record))
             if not targets:
-                raise ValueError("対象の画像が見つかりません。画像を添付してください。")
+                raise ValueError("�Ώۂ̉摜��������܂���B�摜��Y�t���Ă��������B")
             if sliced_ids and history:
                 last = history[-1]
                 history[-1] = ContextMessage(
@@ -501,10 +509,10 @@ class ChatController:
                 )
             if not user_msg.content:
                 history[-1] = ContextMessage(
-                    "user", "この画像について詳しく説明してください。", history[-1].images
+                    "user", "���̉摜�ɂ��ďڂ����������Ă��������B", history[-1].images
                 )
 
-            # Multimodal answer: when the question also needs the web ("これは何？最新の情報も調べて"),
+            # Multimodal answer: when the question also needs the web ("����͉��H�ŐV�̏������ׂ�"),
             # describe the image first so the search queries are about what is actually in it.
             system_extra, sources_md, search_meta = None, "", None
             if (
@@ -512,10 +520,10 @@ class ChatController:
                 and options.web_search != "off"
                 and needs_web_search(user_msg.content, "auto")
             ):
-                yield Event("status", "🖼️ 画像の内容を確認して検索クエリに反映します…")
+                yield Event("status", "??? �摜�̓��e���m�F���Č����N�G���ɔ��f���܂��c")
                 caption = self._caption_for_search(history, targets, policy)
                 augmented = (
-                    replace(user_msg, content=f"{user_msg.content}\n（画像の内容: {caption}）")
+                    replace(user_msg, content=f"{user_msg.content}\n�i�摜�̓��e: {caption}�j")
                     if caption
                     else user_msg
                 )
@@ -593,7 +601,7 @@ class ChatController:
             ):
                 raise
             # One retry with only the current turn. Previous turns remain in the session.
-            yield Event("status", "会話が長いため、今回の質問だけで再試行します。履歴は残ります")
+            yield Event("status", "��b���������߁A����̎��₾���ōĎ��s���܂��B�����͎c��܂�")
             history = history[-1:]
             if decision.intent is Intent.VISION:
                 targets = targets[:4]
@@ -619,7 +627,7 @@ class ChatController:
             and is_refusal(text)
             and not search_failed  # nothing to prefer over the model's answer without search results
         ):
-            yield Event("status", "拒否だったため検索結果を優先して再生成します")
+            yield Event("status", "���ۂ��������ߌ������ʂ�D�悵�čĐ������܂�")
             if search_meta is None:
                 for ev in self._web_search(session_id, user_msg, replace(options, web_search="on")):
                     if isinstance(ev, Event):
@@ -630,7 +638,7 @@ class ChatController:
                 history[-1] = ContextMessage(
                     history[-1].role,
                     history[-1].text
-                    + "\n検索結果にある固有名詞とURLを列挙してください。拒否・説教・言い換えをしないでください。未成年者の性的内容以外は拒否しないでください。",
+                    + "\n�������ʂɂ���ŗL������URL��񋓂��Ă��������B���ہE�����E�������������Ȃ��ł��������B�����N�҂̐��I���e�ȊO�͋��ۂ��Ȃ��ł��������B",
                     history[-1].images,
                 )
             content, reasoning = [], []
@@ -651,7 +659,7 @@ class ChatController:
             if reasoning:
                 yield Event("reasoning", "".join(reasoning))
         if cancelled:
-            text += "\n\n（停止しました）"
+            text += "\n\n�i��~���܂����j"
         meta = {"duration_s": round(time.time() - t0, 2), "cancelled": cancelled}
         if search_meta:
             meta["web_search"] = search_meta
@@ -676,7 +684,7 @@ class ChatController:
                 *history[:-1],
                 ContextMessage(
                     last.role,
-                    "この画像に写っている主な被写体・人物・作品名・文字を、1〜2文で簡潔に書いてください。",
+                    "���̉摜�Ɏʂ��Ă����Ȕ�ʑ́E�l���E��i���E�������A1?2���ŊȌ��ɏ����Ă��������B",
                     last.images,
                 ),
             ]
@@ -702,11 +710,11 @@ class ChatController:
         (evidence, sources_md, meta) tuple (evidence is None if nothing could be read)."""
         text = user_msg.content
         repos = find_github_repos(text)
-        yield Event("status", "🔎 調査エージェントを開始します（自分でファイルを読みに行きます）")
+        yield Event("status", "?? �����G�[�W�F���g���J�n���܂��i�����Ńt�@�C����ǂ݂ɍs���܂��j")
 
         def web_search(query: str) -> str:
             if self.search is None or not self.search.available:
-                raise RuntimeError("Web検索が使えません")
+                raise RuntimeError("Web�������g���܂���")
             resp = self.search.search(query)
             return build_search_context(resp, max_chars=6000)
 
@@ -731,7 +739,7 @@ class ChatController:
             yield (None, "", None)
             return
         read = sum(1 for o in result.observations if o.source and "github_read" in o.call)
-        yield Event("status", f"調査完了: {len(result.observations)} 回の参照（ファイル {read} 件）")
+        yield Event("status", f"��������: {len(result.observations)} ��̎Q�Ɓi�t�@�C�� {read} ���j")
         meta = {
             "purpose": "agent",
             "repos": repos,
@@ -751,18 +759,18 @@ class ChatController:
             return
         if self.search is None or not self.search.available:
             if options.web_search == "on":
-                yield Event("status", "⚠️ Web検索が使えません（ddgs 未インストール / APIキー未設定）")
+                yield Event("status", "?? Web�������g���܂���iddgs ���C���X�g�[�� / API�L�[���ݒ�j")
             yield (None, "", None)
             return
-        yield Event("status", "🔎 検索クエリを作成中…")
+        yield Event("status", "?? �����N�G�����쐬���c")
         history = self._context(session_id, user_msg.id)[:-1]
         rewritten = self.chat.rewrite_search_queries(text, history)
         queries = usable_search_queries(text, rewritten)
         query = queries[0]
         log.info("Web search queries: original=%r effective=%r", text, queries)
         if policy == "open" and self.search.provider_name == "tavily":
-            yield Event("status", "⚠️ Tavily は成人向け検索を規約で禁じています。Brave / DDG を推奨")
-        yield Event("status", f"🔎 Web検索中: {' / '.join(queries)}")
+            yield Event("status", "?? Tavily �͐��l�����������K��ŋւ��Ă��܂��BBrave / DDG �𐄏�")
+        yield Event("status", f"?? Web������: {' / '.join(queries)}")
         resp = self.search.search_many(queries, safesearch=safesearch)
         meta = {
             "query": query,
@@ -774,17 +782,17 @@ class ChatController:
             "safesearch": safesearch,
         }
         if resp.error or not resp.results:
-            yield Event("status", resp.error or f"🔎 「{query}」の検索結果がありませんでした")
+            yield Event("status", resp.error or f"?? �u{query}�v�̌������ʂ�����܂���ł���")
             meta["error"] = resp.error
-            reason = resp.error or "検索結果が見つかりませんでした"
+            reason = resp.error or "�������ʂ�������܂���ł���"
             yield (
-                f"Web検索を行いましたが「{query}」の結果は得られませんでした。"
-                "検索結果が無いことを伝え、未確認の情報を断定しないでください。",
-                f"\n\n---\n⚠️ Web検索で結果を取得できませんでした（{resp.provider}）: {reason}",
+                f"Web�������s���܂������u{query}�v�̌��ʂ͓����܂���ł����B"
+                "�������ʂ��������Ƃ�`���A���m�F�̏���f�肵�Ȃ��ł��������B",
+                f"\n\n---\n?? Web�����Ō��ʂ��擾�ł��܂���ł����i{resp.provider}�j: {reason}",
                 meta,
             )
             return
-        yield Event("status", f"📄 {len(resp.results)}件の結果を読み込みました（{resp.provider}）")
+        yield Event("status", f"?? {len(resp.results)}���̌��ʂ�ǂݍ��݂܂����i{resp.provider}�j")
         yield (build_search_context(resp), format_sources(resp), meta)
 
     # ------------------------------------------------------------------ generate / edit
@@ -808,16 +816,16 @@ class ChatController:
                 sources.append(selected[0])
         if len(sources) > MAX_CONDITION_IMAGES:
             sources = sources[: MAX_CONDITION_IMAGES - 1] + sources[-1:]
-            yield Event("status", f"参照画像は上限{MAX_CONDITION_IMAGES}枚に絞りました")
+            yield Event("status", f"�Q�Ɖ摜�͏��{MAX_CONDITION_IMAGES}���ɍi��܂���")
         if is_edit and not sources:
-            raise ValueError("編集する画像がありません。画像を添付するか、先に画像を生成してください。")
+            raise ValueError("�ҏW����摜������܂���B�摜��Y�t���邩�A��ɉ摜�𐶐����Ă��������B")
         if is_edit:
-            yield Event("status", f"参照画像 {len(sources)}枚で編集します")
+            yield Event("status", f"�Q�Ɖ摜 {len(sources)}���ŕҏW���܂�")
             if sources[-1].meta.get("variation"):
-                yield Event("status", f"編集対象: var{sources[-1].meta['variation']} (id={sources[-1].id})")
-        instruction = user_msg.content or ("この画像を高品質に整えてください" if is_edit else "")
+                yield Event("status", f"�ҏW�Ώ�: var{sources[-1].meta['variation']} (id={sources[-1].id})")
+        instruction = user_msg.content or ("���̉摜�����i���ɐ����Ă�������" if is_edit else "")
         if not instruction:
-            raise ValueError("画像の内容を入力してください。")
+            raise ValueError("�摜�̓��e����͂��Ă��������B")
 
         effective = instruction
         policy = options.content_policy or self.content_policy
@@ -827,20 +835,20 @@ class ChatController:
         answer_context = None  # search results reused for the written explanation (compound requests)
         if decision.search_appearance:
             if options.web_search == "off":
-                yield Event("status", "外見検索はオフです。指定された参照画像と指示を優先します")
+                yield Event("status", "�O�������̓I�t�ł��B�w�肳�ꂽ�Q�Ɖ摜�Ǝw����D�悵�܂�")
             elif self.search is None or not self.search.available:
                 unverified = True
-                unverified_reason = "Web検索が使えません（ddgs 未インストール / APIキー未設定）"
-                yield Event("status", f"⚠️ 外見を検索できませんでした: {unverified_reason}")
+                unverified_reason = "Web�������g���܂���iddgs ���C���X�g�[�� / API�L�[���ݒ�j"
+                yield Event("status", f"?? �O���������ł��܂���ł���: {unverified_reason}")
             else:
-                yield Event("status", "外見・公式設定を検索中…")
+                yield Event("status", "�O���E�����ݒ���������c")
                 rewritten_queries = self.chat.rewrite_appearance_queries(
                     instruction, self._context(session_id, user_msg.id)[:-1]
                 )
                 queries = safe_appearance_queries(instruction, rewritten_queries)
                 safesearch = resolve_safesearch(self.search_safesearch, policy)
                 if policy == "open" and self.search.provider_name == "tavily":
-                    yield Event("status", "⚠️ Tavily は成人向け検索を規約で禁じています。Brave / DDG を推奨")
+                    yield Event("status", "?? Tavily �͐��l�����������K��ŋւ��Ă��܂��BBrave / DDG �𐄏�")
                 resp = self.search.search_many(
                     queries, safesearch=safesearch, result_filter=filter_appearance_results
                 )
@@ -857,7 +865,7 @@ class ChatController:
                     search_meta["error"] = resp.error
                 if resp.results:
                     yield Event(
-                        "status", f"📄 {len(resp.results)}件の結果を読み込みました（{resp.provider}）"
+                        "status", f"?? {len(resp.results)}���̌��ʂ�ǂݍ��݂܂����i{resp.provider}�j"
                     )
                     context_text = build_search_context(resp)
                     answer_context = context_text
@@ -866,21 +874,21 @@ class ChatController:
                     )
                     sources_md = format_sources(resp)
                     if appearance_card:
-                        yield Event("status", "外見カードを作成しました")
+                        yield Event("status", "�O���J�[�h���쐬���܂���")
                     else:
                         digest = search_digest(resp)
                         if digest:
                             # never throw away a successful search: fall back to raw excerpts
                             appearance_card = "NOTES (unverified web excerpts):\n" + digest
                             yield Event(
-                                "status", "外見カードを抽出できなかったため、検索結果の抜粋を参考にします"
+                                "status", "�O���J�[�h�𒊏o�ł��Ȃ��������߁A�������ʂ̔������Q�l�ɂ��܂�"
                             )
                 else:
                     unverified = True
-                    unverified_reason = resp.error or "外見の検索結果が0件でした"
+                    unverified_reason = resp.error or "�O���̌������ʂ�0���ł���"
                     yield Event(
                         "status",
-                        f"⚠️ 外見の検索結果を取得できませんでした（{resp.provider}）: {unverified_reason}",
+                        f"?? �O���̌������ʂ��擾�ł��܂���ł����i{resp.provider}�j: {unverified_reason}",
                     )
                 log.info(
                     "Appearance search: topic=%r queries=%r results=%d card=%s",
@@ -893,13 +901,13 @@ class ChatController:
             appearance_card = appearance_card_for_references(appearance_card)
         answer_text = ""
         if decision.also_answer and not is_edit and not self.cancel_event.is_set():
-            yield Event("status", "解説を作成中…")
+            yield Event("status", "������쐬���c")
             note = (
-                "この返答のあとに、依頼された画像が自動で生成されます。ここでは依頼された解説だけを書き、"
-                "画像そのものは出力しないでください。"
+                "���̕ԓ��̂��ƂɁA�˗����ꂽ�摜�������Ő�������܂��B�����ł͈˗����ꂽ��������������A"
+                "�摜���̂��̂͏o�͂��Ȃ��ł��������B"
             )
             system_extra = "\n\n".join(
-                x for x in (answer_context, appearance_card and f"外見メモ:\n{appearance_card}", note) if x
+                x for x in (answer_context, appearance_card and f"�O������:\n{appearance_card}", note) if x
             )
             answer_parts: list[str] = []
 
@@ -929,7 +937,7 @@ class ChatController:
                 yield Event("text", answer_text + "\n\n")
 
         if self._should_rewrite(options.prompt_rewrite):
-            yield Event("status", "プロンプトを最適化中…")
+            yield Event("status", "�v�����v�g���œK�����c")
             rewrite_args = (
                 instruction,
                 "edit" if is_edit else "generate",
@@ -952,7 +960,7 @@ class ChatController:
             effective = f"{effective}\nIdentity traits from web sources:\n{appearance_card}"
         if unverified and not sources:
             effective += "\nAppearance is unverified. Do not invent specific face, hair or outfit traits."
-        yield Event("status", f"画像プロンプト: {effective}")
+        yield Event("status", f"�摜�v�����v�g: {effective}")
 
         pil_sources = [self.sessions.load_image(s) for s in sources]
         parent_seeds = set()
@@ -972,16 +980,16 @@ class ChatController:
             request = self.images.build_request(effective, options.image)
 
         if not self.manager.is_loaded(IMAGE) and self.manager.get(IMAGE).uses_local_gpu:
-            yield Event("status", "Qwen-Image-2.1 をロード中…（初回はダウンロードで時間がかかります）")
+            yield Event("status", "Qwen-Image-2.1 �����[�h���c�i����̓_�E�����[�h�Ŏ��Ԃ�������܂��j")
 
         variations = 1 if is_edit else max(1, min(int(options.image.variations), 4))
         if self.images.profile.key == "l4" and variations > 2:
-            yield Event("status", "⚠️ L4で4枚生成すると時間がかかります。順番に生成します")
+            yield Event("status", "?? L4��4����������Ǝ��Ԃ�������܂��B���Ԃɐ������܂�")
         preparation_s = time.monotonic() - turn_started
         t0 = time.monotonic()
         yield Event(
             "status",
-            f"画像処理: {request.output_resolution}帯 / {request.steps} steps / {variations}枚（順次）",
+            f"�摜����: {request.output_resolution}�� / {request.steps} steps / {variations}���i�����j",
         )
         image_label = getattr(self.manager.get(IMAGE), "label", IMAGE)
         msg_id = None
@@ -992,7 +1000,7 @@ class ChatController:
             next_seed = request.seed if index == 0 else (request.seed + index * 7919) % (2**31)
             current_request = replace(request, seed=next_seed)
             if variations > 1:
-                yield Event("status", f"バリエーション {index + 1}/{variations}")
+                yield Event("status", f"�o���G�[�V���� {index + 1}/{variations}")
 
             image_started = time.monotonic()
 
@@ -1004,8 +1012,8 @@ class ChatController:
                     q.put(
                         Event(
                             "status",
-                            f"{'編集' if is_edit else '生成'}中… {variation}/{variations}枚 "
-                            f"{step}/{total} step / 今回の画像処理 {elapsed:.0f}s経過（ロード含む）",
+                            f"{'�ҏW' if is_edit else '����'}���c {variation}/{variations}�� "
+                            f"{step}/{total} step / ����̉摜���� {elapsed:.0f}s�o�߁i���[�h�܂ށj",
                         )
                     )
 
@@ -1071,11 +1079,11 @@ class ChatController:
                 raise Cancelled()
             return
         duration = round(time.monotonic() - t0, 2)
-        verb = "編集" if is_edit else "生成"
+        verb = "�ҏW" if is_edit else "����"
         summary = (
-            f"画像を{verb}しました（{records[0].width}×{records[0].height}, "
-            f"{request.steps} step, {len(records)}枚, 画像処理 {duration:.0f}s（ロード含む）, "
-            f"前処理 {preparation_s:.0f}s）"
+            f"�摜��{verb}���܂����i{records[0].width}�~{records[0].height}, "
+            f"{request.steps} step, {len(records)}��, �摜���� {duration:.0f}s�i���[�h�܂ށj, "
+            f"�O���� {preparation_s:.0f}s�j"
         )
         note = (
             card_summary_ja(appearance_card)
@@ -1083,13 +1091,13 @@ class ChatController:
             else ""
         )
         if note:
-            summary += f"\n\n🔎 {note}（Web検索で確認）"
+            summary += f"\n\n?? {note}�iWeb�����Ŋm�F�j"
         elif appearance_card:
-            summary += "\n\n🔎 Web検索の抜粋を参考にしました（外見は未検証）"
+            summary += "\n\n?? Web�����̔������Q�l�ɂ��܂����i�O���͖����؁j"
         if unverified:
             summary += (
-                f"\n\n⚠️ 外見を確認できませんでした（{unverified_reason}）。"
-                "固有キャラの同一性を高めるには参照画像を添付してください。"
+                f"\n\n?? �O�����m�F�ł��܂���ł����i{unverified_reason}�j�B"
+                "�ŗL�L�����̓��ꐫ�����߂�ɂ͎Q�Ɖ摜��Y�t���Ă��������B"
             )
         summary += sources_md
         shown = summary  # the explanation, if any, was already streamed to the UI

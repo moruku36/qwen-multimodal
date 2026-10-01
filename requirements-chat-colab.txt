@@ -1,0 +1,5 @@
+# Chat, vision, search and CPU speech recognition. Colab supplies torch/CUDA.
+-r requirements.txt
+huggingface_hub>=1.0
+faster-whisper>=1,<2
+ipywidgets>=8,<9

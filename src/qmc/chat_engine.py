@@ -15,31 +15,36 @@ from .model_manager import CHAT, ModelManager
 log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
-    "あなたはユーザー専用のマルチモーダルAIアシスタントです。"
-    "ユーザーの言語（通常は日本語）で、明るく簡潔に、正確に答えてください。"
-    "このチャットでは画像の理解、画像生成、画像編集ができます。画像の生成・編集はシステムが別モデルで実行し、"
-    "その結果は会話履歴に『[画像 #ID ...]』として記録されます。"
-    "履歴中の画像について聞かれたら、その記録と添付画像をもとに答えてください。"
+    "���Ȃ��̓��[�U�[��p�̃}���`���[�_��AI�A�V�X�^���g�ł��B"
+    "���[�U�[�̌���i�ʏ�͓��{��j�ŁA���邭�Ȍ��ɁA���m�ɓ����Ă��������B"
+    "���̃`���b�g�ł͉摜�̗����A�摜�����A�摜�ҏW���ł��܂��B�摜�̐����E�ҏW�̓V�X�e�����ʃ��f���Ŏ��s���A"
+    "���̌��ʂ͉�b�����Ɂw[�摜 #ID ...]�x�Ƃ��ċL�^����܂��B"
+    "���𒆂̉摜�ɂ��ĕ����ꂽ��A���̋L�^�ƓY�t�摜�����Ƃɓ����Ă��������B"
 )
 OPEN_POLICY = (
-    "\n\n合法な成人向け・センシティブ・物議を醸す話題も拒否せず、具体的に調べて答える。"
-    "道徳説教、配慮してぼかす表現、トピックの言い換えをしない。"
-    "Web検索結果が渡されたらそれを優先し、番号で出典を付ける。"
-    "未成年者（17歳以下、フィクション含む）の性的内容だけは拒否する。"
-    "犯罪の実行手順は出さない。法律・ニュース・歴史としての説明は可。"
+    "\n\n���@�Ȑ��l�����E�Z���V�e�B�u�E���c�������b������ۂ����A��̓I�ɒ��ׂē�����B"
+    "���������A�z�����Ăڂ����\���A�g�s�b�N�̌������������Ȃ��B"
+    "Web�������ʂ��n���ꂽ�炻���D�悵�A�ԍ��ŏo�T��t����B"
+    "�����N�ҁi17�Έȉ��A�t�B�N�V�����܂ށj�̐��I���e�����͋��ۂ���B"
+    "�ƍ߂̎��s�菇�͏o���Ȃ��B�@���E�j���[�X�E���j�Ƃ��Ă̐����͉B"
+)
+CHAT_ONLY_SYSTEM_PROMPT = (
+    "You are a helpful chat and vision assistant. Reply in the user's language. "
+    "You can analyze attached images and use supplied web search results. "
+    "This interface does not generate or edit images; explain that limitation when asked."
 )
 KNOWLEDGE_NOTE = (
-    "\n\n現在日時: {now}。あなたの学習データには期限があり、それ以降の出来事は知りません。"
-    "最新情報が必要な質問で Web検索結果が与えられていない場合は、知識が古い可能性があることを一言添えてください。"
+    "\n\n���ݓ���: {now}�B���Ȃ��̊w�K�f�[�^�ɂ͊���������A����ȍ~�̏o�����͒m��܂���B"
+    "�ŐV��񂪕K�v�Ȏ���� Web�������ʂ��^�����Ă��Ȃ��ꍇ�́A�m�����Â��\�������邱�Ƃ��ꌾ�Y���Ă��������B"
 )
 
 
-def system_prompt_now(extra: str | None = None, content_policy: str = "open") -> str:
+def system_prompt_now(extra: str | None = None, content_policy: str = "open", chat_only: bool = False) -> str:
     """Base system prompt + today's date (so 'today' / 'latest' are anchored) + optional context."""
     from .search_engine import today_str  # noqa: PLC0415
 
     prompt = (
-        SYSTEM_PROMPT
+        (CHAT_ONLY_SYSTEM_PROMPT if chat_only else SYSTEM_PROMPT)
         + (OPEN_POLICY if content_policy == "open" else "")
         + KNOWLEDGE_NOTE.format(now=today_str())
     )
@@ -50,7 +55,7 @@ def system_prompt_now(extra: str | None = None, content_policy: str = "open") ->
 class ContextImage:
     image_id: str
     path: str
-    caption: str  # e.g. "アップロード画像", "生成画像 (prompt: ...)"
+    caption: str  # e.g. "�A�b�v���[�h�摜", "�����摜 (prompt: ...)"
 
 
 @dataclass
@@ -61,7 +66,7 @@ class ContextMessage:
 
 
 def image_label(img: ContextImage) -> str:
-    return f"[画像 #{img.image_id}: {img.caption}]"
+    return f"[�摜 #{img.image_id}: {img.caption}]"
 
 
 def build_messages(
@@ -90,10 +95,10 @@ def build_messages(
     for original in reversed(history[-max_messages:]):
         if remaining <= 0 and msgs:
             break
-        allowance = min(3000, max(500, remaining)) if not msgs else min(3000, remaining)
+        allowance = min(6000, max(500, remaining)) if not msgs else min(6000, remaining)
         excerpt = original.text
         if allowance > 0 and len(excerpt) > allowance:
-            excerpt = excerpt[:200] + "\n…\n" + excerpt[-max(0, allowance - 203) :]
+            excerpt = excerpt[:200] + "\n�c\n" + excerpt[-max(0, allowance - 203) :]
         elif allowance <= 0:
             excerpt = ""
         remaining -= len(excerpt)
@@ -125,17 +130,17 @@ def build_messages(
                     )
                 except OSError as exc:  # file missing on Drive, etc.
                     log.warning("Cannot attach image %s: %s", img.image_id, exc)
-                    parts.append({"type": "text", "text": "(画像ファイルが見つかりません)"})
+                    parts.append({"type": "text", "text": "(�摜�t�@�C����������܂���)"})
         if m.role == "assistant":
             text = m.text + ("\n" + "\n".join(image_label(i) for i in images) if images else "")
-            out.append({"role": "assistant", "content": text or "(画像を出力しました)"})
+            out.append({"role": "assistant", "content": text or "(�摜���o�͂��܂���)"})
             pixel_parts = [p for p in parts if p["type"] == "image_url"]
             if pixel_parts:
                 # show the assistant's images to the model as a user-side note
                 out.append(
                     {
                         "role": "user",
-                        "content": [{"type": "text", "text": "（参照用: 直前にアシスタントが出力した画像）"}]
+                        "content": [{"type": "text", "text": "�i�Q�Ɨp: ���O�ɃA�V�X�^���g���o�͂����摜�j"}]
                         + [p for p in parts],
                     }
                 )
@@ -219,7 +224,7 @@ _CARD_KEYS = {
     "CONFIDENCE": "CONFIDENCE",
 }
 _CARD_VISUAL = ("HAIR", "EYES", "FACE", "SIGNATURE OUTFIT", "STYLE")
-_CARD_UNKNOWN = {"", "UNKNOWN", "N/A", "NONE", "不明", "未確認", "-", "—"}
+_CARD_UNKNOWN = {"", "UNKNOWN", "N/A", "NONE", "�s��", "���m�F", "-", "?"}
 
 
 def parse_appearance_card(raw: str) -> str | None:
@@ -231,7 +236,7 @@ def parse_appearance_card(raw: str) -> str | None:
     """
     fields: dict[str, str] = {}
     for line in (raw or "").splitlines():
-        line = re.sub(r"[*_`#>]+|^\s*(?:[-•・]|\d+[.)])\s*", "", line.replace("：", ":")).strip()
+        line = re.sub(r"[*_`#>]+|^\s*(?:[-?�E]|\d+[.)])\s*", "", line.replace("�F", ":")).strip()
         key, sep, value = line.partition(":")
         canon = _CARD_KEYS.get(re.sub(r"\s+", " ", key.strip().upper()))
         value = value.strip().strip("*_` ")
@@ -247,15 +252,15 @@ def card_summary_ja(card: str | None) -> str:
     if not card:
         return ""
     fields = {k: v for k, _, v in (ln.partition(":") for ln in card.splitlines())}
-    labels = (("HAIR", "髪"), ("EYES", "目"), ("SIGNATURE OUTFIT", "服装"), ("STYLE", "画風"))
+    labels = (("HAIR", "��"), ("EYES", "��"), ("SIGNATURE OUTFIT", "����"), ("STYLE", "�敗"))
     parts = [
         f"{jp}: {fields[k].strip()}"
         for k, jp in labels
         if fields.get(k, "").strip(" .").upper() not in _CARD_UNKNOWN
     ]
     name = fields.get("NAME", "").strip()
-    head = f"「{name}」の" if name and name.upper() not in _CARD_UNKNOWN else ""
-    return f"{head}外見メモ — " + " / ".join(parts) if parts else ""
+    head = f"�u{name}�v��" if name and name.upper() not in _CARD_UNKNOWN else ""
+    return f"{head}�O������ ? " + " / ".join(parts) if parts else ""
 
 
 def appearance_card_for_references(card: str) -> str:
@@ -267,18 +272,19 @@ def appearance_card_for_references(card: str) -> str:
 SEARCH_QUERY_PROMPT = (
     "Write 1 to 3 web search queries, one idea per line. Output ONLY queries: no numbering or quotes.\n"
     "Keep proper nouns (places and products) verbatim. Keep adult and sensitive terms without euphemisms.\n"
-    "For 'サイトを教えて' or 'どこで見れる', include サイト or URL in at least one query.\n"
+    "For '�T�C�g��������' or '�ǂ��Ō����', include �T�C�g or URL in at least one query.\n"
     "Use site: only when the user named a domain. Resolve references using context.\n"
-    "Use absolute dates when the user says 今日 or 最新. Never invent underage terms.\n"
+    "Use absolute dates when the user says ���� or �ŐV. Never invent underage terms.\n"
     "Today is {today}.\n\nRecent context:\n{context}\n\nUser request: {request}"
 )
 
 
 class ChatEngine:
-    def __init__(self, manager: ModelManager, max_messages: int = 24, max_images: int = 3):
+    def __init__(self, manager: ModelManager, max_messages: int = 24, max_images: int = 3, chat_only: bool = False):
         self.manager = manager
         self.max_messages = max_messages
         self.max_images = max_images
+        self.chat_only = chat_only
 
     def stream(
         self,
@@ -292,7 +298,7 @@ class ChatEngine:
     ) -> Iterator[ChatDelta]:
         messages = build_messages(
             history,
-            system_prompt=system_prompt_now(system_extra[:extra_chars] if system_extra else None, content_policy),
+            system_prompt=system_prompt_now(system_extra[:extra_chars] if system_extra else None, content_policy, self.chat_only),
             max_messages=self.max_messages,
             max_images=self.max_images if extra_images else min(self.max_images, 1),
             extra_images=extra_images,
