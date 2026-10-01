@@ -121,7 +121,7 @@ def build_app(cfg: AppConfig, gpu: GPUInfo | None = None) -> App:
         manager,
         chat,
         VisionEngine(chat),
-        ImageEngine(manager, profile, cfg.image.default_band),
+        ImageEngine(manager, profile, cfg.image.default_band, cfg.image.default_steps, cfg.image.max_band),
         max_image_side=cfg.max_image_side,
         max_upload_mb=cfg.max_upload_mb,
         after_turn=store.sync,

@@ -10,7 +10,7 @@ import gradio as gr
 from .app import App
 from .controller import Event, TurnOptions
 from .gpu_manager import memory_snapshot
-from .image_engine import ASPECT_RATIOS, BANDS, ImageOptions
+from .image_engine import ASPECT_RATIOS, BANDS, ImageOptions, preset_values, workload_summary
 from .imaging import mask_from_editor
 from .router import Mode
 from .search_engine import resolve_safesearch
@@ -218,9 +218,9 @@ def _options(
 
 # ---------------------------------------------------------------------- UI
 def build_ui(app: App) -> gr.Blocks:
-    profile = app.profile
-    bands = [b for b in BANDS if b <= profile.image_max_band]
-    default_band = min(2048, profile.image_max_band)
+    image_engine = app.controller.images
+    default_band = image_engine.default_band
+    bands = sorted({b for b in BANDS if b <= image_engine.max_band} | {default_band, image_engine.max_band})
 
     def stream_turn(session_id: str, events: Iterator[Event], read_aloud: bool = False):
         base = render_history(app, session_id)
@@ -485,11 +485,21 @@ def build_ui(app: App) -> gr.Blocks:
                         type="pil",
                         label="編集する部分を塗る",
                     )
-                with gr.Accordion("画像生成・編集の設定", open=False):
+                with gr.Accordion("画像生成・編集の設定", open=True):
+                    preset = gr.Radio(
+                        [
+                            ("設定値（標準1024帯）", "configured"),
+                            ("下書き768帯 / 20 steps", "draft"),
+                            ("高品質2048帯 / 50 steps（従来設定）", "quality"),
+                        ],
+                        value="configured",
+                        label="画像プリセット（GPU・設定上限内 / 適用時は1枚）",
+                    )
+                    apply_preset = gr.Button("選んだプリセットを再適用", size="sm")
                     with gr.Row():
                         aspect = gr.Dropdown(list(ASPECT_RATIOS), value="16:9", label="アスペクト比")
                         band = gr.Dropdown(bands, value=default_band, label="解像度帯")
-                    steps = gr.Slider(1, 60, value=50, step=1, label="Steps")
+                    steps = gr.Slider(1, 100, value=image_engine.default_steps, step=1, label="Steps")
                     seed = gr.Number(value=-1, precision=0, label="Seed（-1でランダム）")
                     rewrite = gr.Radio(
                         [("自動", "auto"), ("LLMで最適化", "on"), ("そのまま", "off")],
@@ -497,8 +507,9 @@ def build_ui(app: App) -> gr.Blocks:
                         label="画像プロンプト",
                     )
                     variations = gr.Radio(
-                        [(str(n), n) for n in (1, 4)], value=1, label="バリエーション（生成のみ）"
+                        [(str(n), n) for n in (1, 2, 4)], value=1, label="バリエーション（生成のみ）"
                     )
+                workload = gr.Markdown(workload_summary(default_band, image_engine.default_steps, 1))
                 with gr.Accordion("検索・モード", open=False):
                     mode = gr.Radio(MODE_CHOICES, value=Mode.AUTO.value, label="モード")
                     web_search = gr.Radio(
@@ -571,6 +582,15 @@ def build_ui(app: App) -> gr.Blocks:
                 )
             speech_output = gr.Audio(label="回答の読み上げ", autoplay=True, interactive=False, visible=False)
             route_md = gr.Markdown("", elem_id="route-info")
+
+        preset.change(
+            lambda name: preset_values(name, image_engine), preset, [band, steps, variations], queue=False
+        )
+        apply_preset.click(
+            lambda name: preset_values(name, image_engine), preset, [band, steps, variations], queue=False
+        )
+        for control in (band, steps, variations):
+            control.change(workload_summary, [band, steps, variations], workload, queue=False)
 
         settings = [
             mode,

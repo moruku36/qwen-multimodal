@@ -16,6 +16,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from .agent import GitHubReader, ResearchAgent, find_github_repos, needs_agent
 from .asr import ASRBackend
 from .backends.base import Cancelled, ChatParams
 from .chat_engine import (
@@ -35,7 +36,6 @@ from .imaging import (
     slice_tall_image,
     webm_has_video,
 )
-from .agent import GitHubReader, ResearchAgent, find_github_repos, needs_agent
 from .model_manager import CHAT, IMAGE, ModelManager
 from .policy import MINOR_REFUSAL, blocks_minor_sexual_request
 from .router import ImageTarget, Intent, Mode, RouteContext, RouteDecision, route
@@ -791,6 +791,7 @@ class ChatController:
     def _image(
         self, session_id: str, user_msg: MessageRecord, decision: RouteDecision, options: TurnOptions
     ) -> Iterator[Event]:
+        turn_started = time.monotonic()
         is_edit = decision.intent is Intent.EDIT
         sources = (
             self._resolve_targets(
@@ -855,7 +856,9 @@ class ChatController:
                 if resp.error:
                     search_meta["error"] = resp.error
                 if resp.results:
-                    yield Event("status", f"📄 {len(resp.results)}件の結果を読み込みました（{resp.provider}）")
+                    yield Event(
+                        "status", f"📄 {len(resp.results)}件の結果を読み込みました（{resp.provider}）"
+                    )
                     context_text = build_search_context(resp)
                     answer_context = context_text
                     appearance_card = self.chat.build_appearance_card(
@@ -869,11 +872,16 @@ class ChatController:
                         if digest:
                             # never throw away a successful search: fall back to raw excerpts
                             appearance_card = "NOTES (unverified web excerpts):\n" + digest
-                            yield Event("status", "外見カードを抽出できなかったため、検索結果の抜粋を参考にします")
+                            yield Event(
+                                "status", "外見カードを抽出できなかったため、検索結果の抜粋を参考にします"
+                            )
                 else:
                     unverified = True
                     unverified_reason = resp.error or "外見の検索結果が0件でした"
-                    yield Event("status", f"⚠️ 外見の検索結果を取得できませんでした（{resp.provider}）: {unverified_reason}")
+                    yield Event(
+                        "status",
+                        f"⚠️ 外見の検索結果を取得できませんでした（{resp.provider}）: {unverified_reason}",
+                    )
                 log.info(
                     "Appearance search: topic=%r queries=%r results=%d card=%s",
                     appearance_fallback_query(instruction),
@@ -890,7 +898,9 @@ class ChatController:
                 "この返答のあとに、依頼された画像が自動で生成されます。ここでは依頼された解説だけを書き、"
                 "画像そのものは出力しないでください。"
             )
-            system_extra = "\n\n".join(x for x in (answer_context, appearance_card and f"外見メモ:\n{appearance_card}", note) if x)
+            system_extra = "\n\n".join(
+                x for x in (answer_context, appearance_card and f"外見メモ:\n{appearance_card}", note) if x
+            )
             answer_parts: list[str] = []
 
             def answer_producer(q: queue.Queue) -> None:
@@ -967,7 +977,12 @@ class ChatController:
         variations = 1 if is_edit else max(1, min(int(options.image.variations), 4))
         if self.images.profile.key == "l4" and variations > 2:
             yield Event("status", "⚠️ L4で4枚生成すると時間がかかります。順番に生成します")
-        t0 = time.time()
+        preparation_s = time.monotonic() - turn_started
+        t0 = time.monotonic()
+        yield Event(
+            "status",
+            f"画像処理: {request.output_resolution}帯 / {request.steps} steps / {variations}枚（順次）",
+        )
         image_label = getattr(self.manager.get(IMAGE), "label", IMAGE)
         msg_id = None
         records = []
@@ -979,9 +994,20 @@ class ChatController:
             if variations > 1:
                 yield Event("status", f"バリエーション {index + 1}/{variations}")
 
-            def producer(q: queue.Queue, image_request=current_request) -> None:
+            image_started = time.monotonic()
+
+            def producer(
+                q: queue.Queue, image_request=current_request, started=image_started, variation=index + 1
+            ) -> None:
                 def progress(step: int, total: int) -> None:
-                    q.put(Event("status", f"{'編集' if is_edit else '生成'}中… {step}/{total} step"))
+                    elapsed = time.monotonic() - started
+                    q.put(
+                        Event(
+                            "status",
+                            f"{'編集' if is_edit else '生成'}中… {variation}/{variations}枚 "
+                            f"{step}/{total} step / 今回の画像処理 {elapsed:.0f}s経過（ロード含む）",
+                        )
+                    )
 
                 q.put(self.images.run(image_request, progress=progress, cancel=self.cancel_event))
 
@@ -1002,7 +1028,8 @@ class ChatController:
                 msg_id = self.sessions.add_message(
                     session_id, "assistant", "", intent=decision.intent.value, model=image_label
                 )
-            image_meta = {"prompt": instruction, "effective_prompt": effective}
+            image_seconds = round(time.monotonic() - image_started, 2)
+            image_meta = {"prompt": instruction, "effective_prompt": effective, "duration_s": image_seconds}
             if request.mask_image is not None:
                 rel = Path("sessions") / session_id / "masks" / f"{uuid.uuid4().hex[:8]}.png"
                 save_png(request.mask_image, self.sessions.data_dir / rel)
@@ -1033,21 +1060,28 @@ class ChatController:
                 effective_prompt=effective,
                 params=current_request.params_dict(),
                 model=image_label,
-                duration_s=round(time.time() - t0, 2),
+                duration_s=image_seconds,
                 message_id=msg_id,
                 image_id=record.id,
                 source_image_ids=[s.id for s in sources],
             )
             yield Event("image", {"path": str(self.sessions.image_path(record)), "id": record.id})
         if not records:
+            if self.cancel_event.is_set():
+                raise Cancelled()
             return
-        duration = round(time.time() - t0, 2)
+        duration = round(time.monotonic() - t0, 2)
         verb = "編集" if is_edit else "生成"
         summary = (
             f"画像を{verb}しました（{records[0].width}×{records[0].height}, "
-            f"{request.steps} step, {len(records)}枚, {duration:.0f}s）"
+            f"{request.steps} step, {len(records)}枚, 画像処理 {duration:.0f}s（ロード含む）, "
+            f"前処理 {preparation_s:.0f}s）"
         )
-        note = card_summary_ja(appearance_card) if appearance_card and not appearance_card.startswith("NOTES") else ""
+        note = (
+            card_summary_ja(appearance_card)
+            if appearance_card and not appearance_card.startswith("NOTES")
+            else ""
+        )
         if note:
             summary += f"\n\n🔎 {note}（Web検索で確認）"
         elif appearance_card:
@@ -1066,6 +1100,7 @@ class ChatController:
             "effective_prompt": effective,
             "duration_s": duration,
             "variations": len(records),
+            "preparation_s": round(preparation_s, 2),
         }
         if search_meta:
             summary_meta["web_search"] = search_meta

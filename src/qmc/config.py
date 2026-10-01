@@ -198,6 +198,11 @@ def load_config(**overrides) -> AppConfig:
     cfg.chat.remote_model_name = _env("QMC_CHAT_REMOTE_MODEL_NAME", cfg.chat.remote_model_name)
     if _env("QMC_CHAT_CTX"):
         cfg.chat.ctx_size = _env_int("QMC_CHAT_CTX", 0) or None
+    cfg.image.default_band = _env_int("QMC_IMAGE_BAND", cfg.image.default_band)
+    if _env("QMC_IMAGE_STEPS"):
+        cfg.image.default_steps = _env_int("QMC_IMAGE_STEPS", 40)
+    if _env("QMC_IMAGE_MAX_BAND"):
+        cfg.image.max_band = _env_int("QMC_IMAGE_MAX_BAND", 2048)
     cfg.image.precision = _env("QMC_IMAGE_PRECISION", cfg.image.precision) or "auto"
     cfg.image.remote_base_url = _env("QMC_IMAGE_BASE_URL")
     cfg.image.remote_api_key = _env("QMC_IMAGE_API_KEY")

@@ -80,3 +80,11 @@ def test_default_data_dir_outside_colab(monkeypatch):
     monkeypatch.delenv("QMC_DATA_DIR", raising=False)
     cfg = load_config()
     assert isinstance(cfg.data_dir, Path)
+
+
+def test_image_workload_environment(monkeypatch):
+    monkeypatch.setenv("QMC_IMAGE_BAND", "768")
+    monkeypatch.setenv("QMC_IMAGE_STEPS", "20")
+    monkeypatch.setenv("QMC_IMAGE_MAX_BAND", "1536")
+    cfg = load_config()
+    assert (cfg.image.default_band, cfg.image.default_steps, cfg.image.max_band) == (768, 20, 1536)

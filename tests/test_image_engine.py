@@ -94,3 +94,27 @@ def test_edit_runs_on_mock_backend():
     out = engine.run(engine.build_edit_request("darker", [src], ImageOptions(steps=2)))
     assert out.size == (512, 512)
     assert image.requests[-1].is_edit
+
+
+def test_configured_defaults_presets_and_limits():
+    from qmc.image_engine import preset_values
+
+    engine, mm, *_ = _engine("a100_80")
+    engine = ImageEngine(mm, engine.profile, default_band=1536, default_steps=32, max_band=1536)
+    request = engine.build_request("cat", ImageOptions())
+    assert (request.output_resolution, request.steps) == (1536, 32)
+    assert preset_values("configured", engine) == (1536, 32, 1)
+    assert preset_values("draft", engine) == (768, 20, 1)
+    assert preset_values("quality", engine) == (1536, 50, 1)
+    assert engine.build_request("cat", ImageOptions(band=2048)).output_resolution == 1536
+    full, *_ = _engine("a100_80")
+    assert preset_values("quality", full) == (2048, 50, 1)
+
+
+def test_cancelled_request_does_not_load_model():
+    engine, mm, _, _ = _engine()
+    cancel = threading.Event()
+    cancel.set()
+    with pytest.raises(Cancelled):
+        engine.run(engine.build_request("cat", ImageOptions()), cancel=cancel)
+    assert not mm.events

@@ -147,3 +147,7 @@ PYTHONPATH=src python -m qmc --mock
 テストは `PYTHONPATH=src python -m pytest`。外部画像 API の開発用モックは `python scripts/image_http_stub.py --port 8013` で起動できます。設計の根拠は [`docs/adr/`](docs/adr/)、構成図は [`docs/architecture.md`](docs/architecture.md) にあります。
 
 ソースコードは MIT License。モデルの重みは各モデルのライセンスに従います。Qwen-Image-2.1 は非商用研究用途のライセンスです。
+
+## 画像生成の時間・Colabユニット
+
+UIの既定値を、固定2048帯/50 stepsから設定値（標準1024帯・A100では40 steps・1枚）に統一しました。「高品質2048帯 / 50 steps」で従来設定に戻せます。「下書き768帯 / 20 steps」は細部・文字・指示の再現性とのトレードオフです。画像ごとの経過時間、検索などの前処理時間、ロード込みの画像処理時間を表示します。実GPUでの速度・CU節約率は未測定です。[根拠と検証範囲](docs/image-performance.md)を参照してください。生成停止・モデル解放ではランタイムは終了しないため、利用後はセッション終了操作を行ってください。

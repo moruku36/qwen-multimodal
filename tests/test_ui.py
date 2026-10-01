@@ -84,3 +84,18 @@ def test_pending_and_status(app):
     assert "loading" in p[1]["content"] and "bad" in p[1]["content"]
     md = status_markdown(app)
     assert "CPU (mock)" in md and "Loaded" in md
+
+
+def test_image_controls_use_configured_defaults_and_presets(app):
+    app.controller.images.default_band = 768
+    app.controller.images.default_steps = 32
+    config = build_ui(app).get_config_file()
+    by_label = {c["props"].get("label"): c for c in config["components"]}
+    assert by_label["解像度帯"]["props"]["value"] == 768
+    assert by_label["Steps"]["props"]["value"] == 32
+    preset = by_label["画像プリセット（GPU・設定上限内 / 適用時は1枚）"]
+    assert preset["props"]["value"] == "configured"
+    dep = next(d for d in config["dependencies"] if (preset["id"], "change") in d["targets"])
+    assert dep["outputs"] == [
+        by_label[label]["id"] for label in ("解像度帯", "Steps", "バリエーション（生成のみ）")
+    ]
