@@ -14,3 +14,5 @@ torchao>=0.13
 huggingface_hub>=1.0
 faster-whisper>=1,<2
 edge-tts>=6,<8
+# Explicit notebook shutdown confirmation control.
+ipywidgets>=8,<9
