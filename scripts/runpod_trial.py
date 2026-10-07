@@ -12,6 +12,7 @@ import sys
 import time
 import uuid
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.modules.setdefault("runpod_trial", sys.modules[__name__])
 
 @dataclass(frozen=True)
@@ -72,7 +73,7 @@ def _http(address, path, key, payload=None, headers=None):
         connection.close()
 
 
-def run_injected(inputs, *, owner_start=False, simulated=False):
+def run_injected(inputs, *, owner_start=False, simulated=False, owui=False, _fixture_wait_seconds=5):
     """Uses only caller-injected values. Never serializes inputs or exception text.
 
     owner_start is an explicit call-site gate, not evidence of owner consent.
@@ -124,23 +125,38 @@ def run_injected(inputs, *, owner_start=False, simulated=False):
             result["health_ok"] = any(m.get("id") == "qwen-27b" for m in catalog.get("data", []))
             if not result["health_ok"]:
                 raise RuntimeError("health_refused")
-            # This is one owner-triggered CLI probe, not an installed OWUI hook.
-            payload = {"model": "qwen-27b", "messages": [{"role": "user", "content": "Reply OK."}], "stream": False}
-            pending = host.enqueue(inputs.subject, payload)
-            while host.status()["phase"] != "ready":
-                phase = host.step()
-                if phase == "created":
-                    peer = inputs.enroll_peer(sid, host.status()["pod_id"])
-                    if type(peer) is not SSHPeer:
-                        raise RuntimeError("typed_peer_required")
-                    host.register_peer(sid, peer)
-                elif phase not in {"bootstrapped", "ready"}:
-                    raise RuntimeError("startup_unconfirmed")
-            headers = host.ready_request(pending)
-            reply = _http(address, "/v1/chat/completions", keys.inference, payload, headers)
-            # Do not persist or print reply/prompt/auth/provider responses.
-            content = reply.get("choices", [{}])[0].get("message", {}).get("content")
-            result["chat_ok"] = type(content) is str and 0 < len(content) <= 8192
+            if owui:
+                # One real verified-manual backend chat; catalog never creates.
+                until = time.monotonic() + (_fixture_wait_seconds if simulated else 5400)
+                while time.monotonic() < until:
+                    phase = host.step()
+                    if phase == "created":
+                        host.register_peer(sid, inputs.enroll_peer(sid, host.status()["pod_id"]))
+                    if host.release_count:
+                        with host._lock:
+                            result["chat_ok"] = any(v["outcome"] == "verified_written" for v in host._row(sid)["inference_results"])
+                        break
+                    if phase not in {"idle", "created", "bootstrapped", "ready", "peer_approval_required"}:
+                        raise RuntimeError("owui_session_unconfirmed")
+                    time.sleep(.05)
+            else:
+                # One owner-triggered CLI probe, not an installed OWUI hook.
+                payload = {"model": "qwen-27b", "messages": [{"role": "user", "content": "Reply OK."}], "stream": False}
+                pending = host.enqueue(inputs.subject, payload)
+                while host.status()["phase"] != "ready":
+                    phase = host.step()
+                    if phase == "created":
+                        peer = inputs.enroll_peer(sid, host.status()["pod_id"])
+                        if type(peer) is not SSHPeer:
+                            raise RuntimeError("typed_peer_required")
+                        host.register_peer(sid, peer)
+                    elif phase not in {"bootstrapped", "ready"}:
+                        raise RuntimeError("startup_unconfirmed")
+                headers = host.ready_request(pending)
+                reply = _http(address, "/v1/chat/completions", keys.inference, payload, headers)
+                # Do not persist or print reply/prompt/auth/provider responses.
+                content = reply.get("choices", [{}])[0].get("message", {}).get("content")
+                result["chat_ok"] = type(content) is str and 0 < len(content) <= 8192
             if not result["chat_ok"]:
                 raise RuntimeError("chat_unconfirmed")
             result["status"] = "PROBE_COMPLETE"
@@ -202,14 +218,21 @@ def _provider(path, expected_sha):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["plan", "dummy", "start"])
+    parser.add_argument("command", choices=["plan", "dummy", "validate", "start", "serve"])
     parser.add_argument("--operations-source", type=Path)
     parser.add_argument("--provider", type=Path)
     parser.add_argument("--provider-sha256")
+    parser.add_argument("--config", type=Path)
     parser.add_argument("--owner-start", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "plan":
         result = plan()
+    elif args.command == "validate":
+        try:
+            from runpod_provider import read_config, validate_config
+            result = validate_config(read_config(args.config))
+        except Exception:
+            result = {"ready": False, "code": "CONFIG_READ_REFUSED"}
     elif args.command == "dummy":
         if args.operations_source is None:
             result = {"status": "REFUSED", "code": "REVIEWED_OPERATIONS_SOURCE_REQUIRED"}
@@ -221,17 +244,22 @@ def main(argv=None):
             result = dummy_trial()
     elif not args.owner_start:
         result = {"status": "REFUSED", "code": "OWNER_START_REQUIRED"}
-    elif not all((args.operations_source, args.provider, args.provider_sha256)):
+    elif not args.operations_source or not (args.config or (args.provider and args.provider_sha256)) or (args.config and args.provider):
         result = {"status": "REFUSED", "code": "EXPLICIT_REVIEWED_PROVIDER_REQUIRED"}
     else:
         try:
             sys.path.insert(0, str(args.operations_source.resolve()))
-            with _provider(args.provider, args.provider_sha256)() as inputs:
-                result = run_injected(inputs, owner_start=True)
+            if args.config:
+                from runpod_provider import read_config, open_injection
+                with open_injection(read_config(args.config)) as inputs:
+                    result = run_injected(inputs, owner_start=True, owui=args.command == "serve")
+            else:
+                with _provider(args.provider, args.provider_sha256)() as inputs:
+                    result = run_injected(inputs, owner_start=True, owui=args.command == "serve")
         except Exception:
             result = {"status": "REFUSED", "code": "PROVIDER_OR_TRIAL_REFUSED"}
     print(json.dumps(result, sort_keys=True))
-    return 0 if result.get("status") == "COMPLETE" or args.command == "plan" else 2
+    return 0 if result.get("status") == "COMPLETE" or result.get("ready") is True or args.command == "plan" else 2
 
 
 if __name__ == "__main__":
