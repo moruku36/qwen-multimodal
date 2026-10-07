@@ -1,0 +1,20 @@
+{
+  "schema": "runpod-owner-v1",
+  "account": null,
+  "account_attested": false,
+  "image": null,
+  "gpu_type": "NVIDIA A100 80GB PCIe",
+  "gpu_rate": null,
+  "storage_rate": null,
+  "overhead": null,
+  "rest_ip": null,
+  "ssh_executable": null,
+  "ssh_key": null,
+  "journal_path": null,
+  "head_path": null,
+  "journal_domain": null,
+  "export_root": null,
+  "subject": null,
+  "owui_source_sha256": null,
+  "owui_version": "0.11.4"
+}
