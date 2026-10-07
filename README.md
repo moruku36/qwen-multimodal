@@ -1,8 +1,12 @@
-# Qwen Multimodal Colab
+# Qwen Multimodal
 
 [English](README.md) | [日本語](README.ja.md)
 
-A personal Gradio chat application for Google Colab with Qwen chat/vision and image generation/editing, web search, read-only GitHub research, PDFs, short videos, speech input, and optional readout. It requires an NVIDIA A100 (80GB recommended) with Qwen3.8-27B Q8_K_L; L4 and A100 40GB are not supported at the moment. That quantization change still needs GPU measurement.
+A personal Gradio chat application with Qwen chat/vision and image generation/editing, web search, read-only GitHub research, PDFs, short videos, speech input, and optional readout. It requires an NVIDIA A100 (80GB recommended) with Qwen3.8-27B Q8_K_L; L4 and A100 40GB are not supported at the moment. That quantization change still needs GPU measurement.
+
+## Runtime options
+
+This repository contains the Qwen model and Gradio UI application. The existing Colab notebooks remain available below. RunPod lifecycle and Open WebUI integration are maintained separately in [qwen-runpod-operations](https://github.com/moruku36/qwen-runpod-operations); the live GPU connection is still under validation. CPU and mock checks do not establish a successful paid RunPod session.
 
 ## Start in Colab
 
@@ -12,7 +16,7 @@ recognition while omitting image generation and editing. See the
 [Q8-first roadmap](docs/chat-only-roadmap.md) for validation status and the later
 BF16 comparison. The original notebook below remains the full multimodal workflow.
 
-1. Open the [Colab notebook](https://colab.research.google.com/github/moruku36/qwen-multimodal-colab/blob/main/Qwen-Multimodal-Colab.ipynb). **An A100 runtime is required** (A100 80GB recommended); L4 and A100 40GB are currently not supported.
+1. Open the [Colab notebook](https://colab.research.google.com/github/moruku36/qwen-multimodal/blob/main/Qwen-Multimodal-Colab.ipynb). **An A100 runtime is required** (A100 80GB recommended); L4 and A100 40GB are currently not supported.
 2. Optionally add `HF_TOKEN` and search-provider keys through Colab Secrets.
 3. Run cells 1–4 in order and open the resulting Gradio link.
 

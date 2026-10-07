@@ -1,20 +1,24 @@
-# Qwen Multimodal Colab
+# Qwen Multimodal
 
 [English](README.md) | [日本語](README.ja.md)
 
-Qwenの会話・画像理解・画像生成編集、Web検索、GitHub読み取り調査、PDF、短い動画、音声入力・読み上げをまとめたColab用Gradioアプリです。A100（80GB 推奨）が必須で、L4 と A100 40GB は現在非対応です。量子化変更後のGPU実測は未完了です。
+Qwenの会話・画像理解・画像生成編集、Web検索、GitHub読み取り調査、PDF、短い動画、音声入力・読み上げをまとめたGradioアプリです。A100（80GB 推奨）が必須で、L4 と A100 40GB は現在非対応です。量子化変更後のGPU実測は未完了です。
 
 ---
 
-# Qwen Multimodal Colab
+# Qwen Multimodal
 
-Google Colab で動く個人用の AI チャット画面です。**会話・画像の理解と生成・PDFや短い動画の読解・音声入力**を一つの画面で使えます。会話と画像は Google Drive に保存できます。
+個人用の AI チャット画面です。既存の Google Colab 起動手順も引き続き使えます。**会話・画像の理解と生成・PDFや短い動画の読解・音声入力**を一つの画面で使えます。会話と画像は Google Drive に保存できます。
 
 > **English:** A personal Gradio chat app for Google Colab, designed for an A100 80GB. Qwen3.8-27B (GGUF Q8_K_L via llama.cpp) handles chat and vision; Qwen-Image-2.1 handles image creation and edits. It also supports web search, appearance lookup for named characters before image generation, a read-only research agent for GitHub repositories, PDFs, short videos, speech input and optional readout. Earlier core flows were tested on an A100 (with the previous Q4_K_M chat model); recent features and the Q8_K_L switch have CPU tests and still need Colab GPU verification.
 
-## まず使う
+## 実行環境
 
-1. [Colab Notebook を開く](https://colab.research.google.com/github/moruku36/qwen-multimodal-colab/blob/main/Qwen-Multimodal-Colab.ipynb)。ランタイムは **A100 が必須**（推奨構成: A100 80GB + Qwen3.8-27B **Q8_K_L**）です。L4 と A100 40GB は現在非対応です。
+このrepoではQwenモデルとGradio画面を管理します。RunPodのライフサイクル管理とOpen WebUI連携は、別repoの [qwen-runpod-operations](https://github.com/moruku36/qwen-runpod-operations) で管理しています。RunPodの実GPU接続は検証中です。CPU・モック検証は有料RunPodセッションの成功を示すものではありません。
+
+## Colabでまず使う
+
+1. [Colab Notebook を開く](https://colab.research.google.com/github/moruku36/qwen-multimodal/blob/main/Qwen-Multimodal-Colab.ipynb)。ランタイムは **A100 が必須**（推奨構成: A100 80GB + Qwen3.8-27B **Q8_K_L**）です。L4 と A100 40GB は現在非対応です。
 2. Colab の「🔑 Secrets」に `HF_TOKEN` を登録します（任意ですが推奨）。検索用の `TAVILY_API_KEY` / `BRAVE_API_KEY` も任意です。
 3. Notebook の **Cell 1 → 4** を順番に実行し、最後に表示されるリンクから画面を開きます。初回はモデルのダウンロードに時間がかかります。
 
