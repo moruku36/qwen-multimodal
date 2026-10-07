@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 
 TZ = ZoneInfo("Asia/Tokyo")
 USER_AGENT = (
-    "Mozilla/5.0 (compatible; qwen-multimodal-colab/0.1; +https://github.com/moruku36/qwen-multimodal-colab)"
+    "Mozilla/5.0 (compatible; qwen-multimodal-colab/0.1; +https://github.com/moruku36/qwen-multimodal)"
 )
 SECOND_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
 
