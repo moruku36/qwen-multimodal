@@ -18,7 +18,10 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import runpod_provider as provider
 from runpod_trial import main, run_injected
-import test_runpod_trial as old
+if __package__:
+    from . import test_runpod_trial as old
+else:
+    import test_runpod_trial as old
 
 AVAILABLE = importlib.util.find_spec("qmc_runpod") is not None
 SOURCE = b'''@app.post('/api/chat/completions')
