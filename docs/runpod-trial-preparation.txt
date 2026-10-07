@@ -1,0 +1,45 @@
+RunPod単一セッションlauncher候補
+
+現在の状態
+本人就寝中のため有料実行HOLD。候補の実装とdummy検証のみ。次の本人開始連絡までstart --owner-startを実行しない。新鍵・実credential読取り・新persistent設定・実SSH・Pod操作・OWUI変更は今回行っていない。
+モデル/UIはmoruku36/qwen-multimodal。ライフサイクル実装は別repo moruku36/qwen-runpod-operations。この候補はoperations実装を複製せず、明示したレビュー済みsourceからfactoryを呼ぶ。
+
+CLIと受渡し
+scripts/runpod_trial.py plan は設定案だけを表示する。
+scripts/runpod_trial.py dummy --operations-source <reviewed-operations-source> は実factory/host/gatewayを使い、REST/SSH/upstreamを公開dummy adapterへ置き換える。dummyにはoperationsの公開testsも必要。
+scripts/runpod_trial.py start は --owner-start がなければproviderファイルさえ読まず拒否する。
+本人の次の開始連絡、providerのレビューと実設定確認がそろった後だけ:
+python scripts/runpod_trial.py start --operations-source <reviewed-source> --provider <owner-provider.py> --provider-sha256 <reviewed-provider-sha256> --owner-start
+CLIへ秘密値は渡さない。providerファイル自体にも秘密値を書かない。指定ファイルはSHA確認後だけ読み込む。provider内部の参照方式は本人が指定する既存承認済み方式に限定する。
+owner-startは誤実行防止のcall-site gateであり、owner同意の証明・HOLD解除の証拠ではない。
+
+providerの最小契約
+from runpod_trial import Injection, Credentials を使う。open_injection()はcontext managerとして、次の値を持つInjectionをyieldする。
+・既存承認済みownerでopen済みのjournal、承認済みexport先、確認済みsubject。
+・本人のaccountとimmutable imageを含むPodSpec、最新のGPU/storage/費用を含むRate、固定REST IP、既存SSH executable参照。
+・既存参照からメモリ内に受け取ったprovider/model/inference/control credential。後者2種は別値。秘密の探索・新鍵作成・新保存設定はしない。
+・enroll_peer(session_id, pod_id): この新trial Podの確認済み公開fingerprint/known_hostsと既存SSH key参照からSSHPeerを返す。TOFUや保持Podの再利用はしない。
+・authorize_termination(scope): export/readback後のsession/pod/receipt SHA/期限に対し、本人の個別承認を受けたTerminationApprovalを返す。拒否ならNone。広い一括削除権限を渡さない。
+providerが既存journalの寿命とcredential参照を管理する。launcherはstoreや環境変数を探索しない。providerの実装は未提供であり、既存方式を確認してから差し込む。
+
+試験の流れ
+1. total USD10、work90分、cleanup10分、cleanup reserve USD1、idle5分の新sessionを承認する。開始時にUTC expiryを固定する。
+2. private gatewayを起動し、healthとmodel catalogを確認。health/catalogはPodを作らない。
+3. 1回のowner CLI probeから新Podを作り、owner側peer確認、bootstrap/load、Reply OK.のchatを行う。これはinstalled OWUI manual-hookの確認を代替しない。
+4. stop→export→readback→個別対象承認→DELETE1回→GET不在確認。削除不明は再試行せずcleanup_required=true。保持Pod gfvzduwn8wej0eは除外する。
+5. stdoutの固定JSONを公開状態記録として保持する。health_ok/chat_ok/export_readback_ok/termination_absence_confirmed/cleanup_requiredを確認。本文・credential・例外本文・接続先・account・Pod IDは公開JSONに含めない。
+6. 不在確認だけで最終実請求を断定しない。本人がBillingを別途照合する。
+
+費用判断
+80GB volume、20GB container、A10080GB1台。起動前に全100分のRate.costがUSD10以内でなければ拒否する。cleanup費用のreserveも既存hostが検証する。価格とstorage/付加費用は本人の最新quoteをproviderへ渡す。これはprovider側の請求上限機能ではなく、障害時にUSD10を絶対保証するものではない。
+未知create/deleteはblind retryしない。未知create、未確認削除、export失敗、個別承認拒否はcleanup_requiredと固定コードで残し、正確な新session/Podをowner側で処理する。
+
+本人の残る操作
+1. 既存credential/SSH keyの参照方式を確認し、秘密は承認済みproviderからローカルのメモリ内で入力・注入する。値をchat・repo・argvへ貼らない。
+2. account/image/rate、既存journal/export、peer確認、対象終了承認の実設定を含むproviderとsourceを確認する。未作成のjournalなどが必要なら準備完了と扱わず、具体的な設定作業を別途確認する。
+3. 次の本人開始連絡でHOLD解除後、確認済みproviderを指定してstartする。終了承認とBilling照合を行う。
+既存アクセス方式未確認と未適用C2設定は、launcher実装だけでは解決しない。新鍵を前提にしない。
+
+検証範囲
+dummyは実factory、実HTTP gateway、実hostのexport/readback・exact termination approvalガードを使う。外部通信とSSHはdummy、listenはloopback port0のみ。実OWUI接続・GPU実測・実費は未確認。operations原本は変更しない。
+Qwen merge後main CIを確認したところ実行なし。公開workflowはpull_requestのみで、main pushを対象にしていない。PR36の対象head CPU CIは成功済み。
