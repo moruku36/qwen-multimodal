@@ -6,7 +6,7 @@ A personal Gradio chat application with Qwen chat/vision and image generation/ed
 
 ## Runtime options
 
-This repository contains the Qwen model and Gradio UI application. The existing Colab notebooks remain available below. RunPod lifecycle and Open WebUI integration are maintained separately in [qwen-runpod-operations](https://github.com/moruku36/qwen-runpod-operations); the live GPU connection is still under validation. CPU and mock checks do not establish a successful paid RunPod session.
+This repository contains the Qwen model and Gradio UI application. The existing Colab notebooks remain available below. RunPod lifecycle and Open WebUI integration are maintained separately in [qwen-runpod-operations](https://github.com/moruku36/qwen-runpod-operations). A separate minimal Phase1 trial displayed one Qwen2.5-1.5B-Instruct reply through Open WebUI on October 9, 2026; see the [verification record (Japanese)](docs/runpod-phase1-verification-2026-10-09.md). This does not validate the integrated launcher or this application's full RunPod workflow; those remain under validation. CPU and mock checks alone do not establish a successful paid RunPod session.
 
 ## Start in Colab
 
