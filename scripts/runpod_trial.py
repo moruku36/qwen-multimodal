@@ -224,6 +224,10 @@ def main(argv=None):
     parser.add_argument("--provider-sha256")
     parser.add_argument("--config", type=Path)
     parser.add_argument("--owner-start", action="store_true")
+    parser.add_argument("--credential-approval", type=Path)
+    parser.add_argument("--credential-factory-source", type=Path)
+    parser.add_argument("--credential-launcher-sha256")
+    parser.add_argument("--credential-claims", type=Path)
     args = parser.parse_args(argv)
     if args.command == "plan":
         result = plan()
@@ -246,6 +250,13 @@ def main(argv=None):
         result = {"status": "REFUSED", "code": "OWNER_START_REQUIRED"}
     elif not args.operations_source or not (args.config or (args.provider and args.provider_sha256)) or (args.config and args.provider):
         result = {"status": "REFUSED", "code": "EXPLICIT_REVIEWED_PROVIDER_REQUIRED"}
+    elif any((args.credential_approval, args.credential_factory_source,
+              args.credential_launcher_sha256, args.credential_claims)):
+        try:
+            from runpod_credman_startup import start_once
+            result = start_once(args)
+        except Exception:
+            result = {"status": "REFUSED", "code": "CREDENTIAL_STARTUP_REFUSED"}
     else:
         try:
             sys.path.insert(0, str(args.operations_source.resolve()))

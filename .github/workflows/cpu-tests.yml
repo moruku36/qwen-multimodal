@@ -8,6 +8,36 @@ permissions:
   contents: read
 
 jobs:
+  credential-startup-contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: qwen
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: moruku36/ai-engineering-factory
+          ref: 9801916712af1c1f56fe04a0dcf1ef4e280f6f1a
+          path: factory
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: moruku36/qwen-runpod-operations
+          ref: 2943ebe4338062ef9a900019530f6b7dd3f66963
+          path: operations
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - name: Run synthetic credential/startup contracts (no live effects)
+        run: python -I -B qwen/tests/runpod_credman_contracts.py --factory-source factory --operations-source operations
+
   cpu-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
