@@ -8,6 +8,27 @@ A personal Gradio chat application with Qwen chat/vision and image generation/ed
 
 This repository contains the Qwen model and Gradio UI application. The existing Colab notebooks remain available below. RunPod lifecycle and Open WebUI integration are maintained separately in [qwen-runpod-operations](https://github.com/moruku36/qwen-runpod-operations). A separate minimal Phase1 trial displayed one Qwen2.5-1.5B-Instruct reply through Open WebUI on October 9, 2026; see the [verification record (Japanese)](docs/runpod-phase1-verification-2026-10-09.md). This does not validate the integrated launcher or this application's full RunPod workflow; those remain under validation. CPU and mock checks alone do not establish a successful paid RunPod session.
 
+### Current connection diagram (Phase1 verified)
+
+This is the minimal connection path verified on October 9, 2026. The trial Pod was stopped and deleted after one reply; it is not an always-on deployment.
+
+```mermaid
+flowchart LR
+    subgraph Windows["Windows"]
+        UI["Open WebUI"]
+    end
+    subgraph Trial["RunPod trial Pod — deleted"]
+        Proxy["HTTPS proxy"]
+        Guard["guard<br/>Authentication before every route"]
+        Server["vLLM<br/>Loopback only"]
+        Model["Qwen2.5-1.5B-Instruct<br/>RTX PRO 4000 · 24GB · 1 GPU"]
+        Proxy <--> Guard <--> Server <--> Model
+    end
+    UI <-->|Authenticated HTTPS| Proxy
+```
+
+The guard allows only model listing and chat completions. The reply `Connected successfully.` was displayed in Open WebUI. The [Windows credential startup integration](docs/runpod-credman-startup.ja.md) is merged and disabled by default. Its 55 mock checks and CI passed; startup with real Windows credentials and a GPU remains unverified. Phase2 (A100, larger models, multimodal use, and a five-role broker) remains a plan; the broker is not implemented. See the [Phase1 verification record](docs/runpod-phase1-verification-2026-10-09.md) for the configuration, limitations, and cleanup result. Edit this Mermaid block when the verified path changes.
+
 ## Start in Colab
 
 For the lightweight Q8 chat/vision workflow on an A100 80GB, open the
