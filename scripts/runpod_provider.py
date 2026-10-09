@@ -78,20 +78,21 @@ def _secret(role):
     return getpass.getpass("Existing " + role + " credential (hidden; not saved): ")
 
 
-def _peer_input(sid, pod):
-    return json.loads(input("Verified NEW peer proof JSON for " + sid + "/" + pod + ": "))
+def _peer_input(sid, pod, *, read_input=input):
+    return json.loads(read_input("Verified NEW peer proof JSON for " + sid + "/" + pod + ": "))
 
 
-def _approve(scope):
+def _approve(scope, *, read_input=input):
     from qmc_runpod.ondemand import TerminationApproval
     exact = scope.session_id + ":" + scope.pod_id + ":" + scope.receipt_sha256
-    if input("Exact terminate approval; type " + exact + ": ") != exact: return None
+    if read_input("Exact terminate approval; type " + exact + ": ") != exact: return None
     return TerminationApproval("owner-" + scope.session_id, "terminate", scope.session_id,
                                scope.pod_id, scope.receipt_sha256, scope.expires_at)
 
 
 @contextmanager
-def open_injection(config, *, secret_reader=_secret, peer_reader=_peer_input, approval_reader=_approve):
+def open_injection(config, *, secret_reader=_secret, peer_reader=_peer_input, approval_reader=_approve,
+                   provider_reader=None):
     """Production provider: existing paths only, explicit memory-only secret reader."""
     if not validate_config(config)["ready"]: raise RuntimeError("CONFIG_INCOMPLETE")
     # Refuse before prompting if approved persistent infrastructure is absent.
@@ -101,7 +102,10 @@ def open_injection(config, *, secret_reader=_secret, peer_reader=_peer_input, ap
     from qmc_runpod.c1_ports import PodSpec, Rate
     from qmc_runpod.execution_adapters import SSHPeer, verify_known_host
     try:
-        keys = Credentials(*(secret_reader(role) for role in ("provider", "model", "inference", "control")))
+        # Only the pinned owner startup may inject the one-use Windows provider.
+        # Other roles retain their existing explicit input; there is no fallback.
+        provider_key = provider_reader() if provider_reader is not None else secret_reader("provider")
+        keys = Credentials(provider_key, *(secret_reader(role) for role in ("model", "inference", "control")))
         signing_key = bytes.fromhex(secret_reader("journal signing key hex"))
         if len(signing_key) < 32 or len(signing_key) > 128: raise ValueError()
     except Exception: raise RuntimeError("EXISTING_CREDENTIAL_INPUT_REFUSED") from None
