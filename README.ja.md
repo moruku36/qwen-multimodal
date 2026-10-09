@@ -16,6 +16,27 @@ Qwenの会話・画像理解・画像生成編集、Web検索、GitHub読み取�
 
 このrepoではQwenモデルとGradio画面を管理します。RunPodのライフサイクル管理とOpen WebUI連携は、別repoの [qwen-runpod-operations](https://github.com/moruku36/qwen-runpod-operations) で管理しています。2026年10月9日、独立した小型モデルのPhase1試験で、Open WebUIからQwen2.5-1.5B-Instructの1回答を表示しました。[検証記録](docs/runpod-phase1-verification-2026-10-09.md)を参照してください。統合launcherと本アプリ全体のRunPod実機検証は引き続き未完了です。CPU・モック検証だけで有料RunPodセッションの成功を示すことはできません。
 
+### 現状の接続図（Phase1で実証済み）
+
+2026年10月9日に確認した最小構成です。試験Podは1回答の確認後に停止・削除済みで、常時稼働していません。
+
+```mermaid
+flowchart LR
+    subgraph Windows["Windows"]
+        UI["Open WebUI"]
+    end
+    subgraph Trial["RunPod試験Pod — 削除済み"]
+        Proxy["HTTPS proxy"]
+        Guard["guard<br/>全ルートの判定前に認証"]
+        Server["vLLM<br/>loopbackのみ"]
+        Model["Qwen2.5-1.5B-Instruct<br/>RTX PRO 4000 · 24GB · 1台"]
+        Proxy <--> Guard <--> Server <--> Model
+    end
+    UI <-->|認証付きHTTPS| Proxy
+```
+
+guardの許可対象はモデル一覧とチャット回答だけです。Open WebUIに `Connected successfully.` の回答を表示できました。[Windows資格情報の通常起動統合](docs/runpod-credman-startup.ja.md)はマージ済みで、既定では無効です。モック55件とCIは成功していますが、実Windows資格情報とGPUを使う通常起動は未検証です。Phase2（A100・大モデル・マルチモーダル・5役割broker）は計画段階で、brokerは未実装です。構成・検証限界・清掃結果は[Phase1検証記録](docs/runpod-phase1-verification-2026-10-09.md)を参照してください。実証した接続経路が変わったら、このMermaidブロックを更新します。
+
 ## Colabでまず使う
 
 1. [Colab Notebook を開く](https://colab.research.google.com/github/moruku36/qwen-multimodal/blob/main/Qwen-Multimodal-Colab.ipynb)。ランタイムは **A100 が必須**（推奨構成: A100 80GB + Qwen3.8-27B **Q8_K_L**）です。L4 と A100 40GB は現在非対応です。
