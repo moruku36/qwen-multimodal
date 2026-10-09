@@ -14,7 +14,7 @@ Qwenの会話・画像理解・画像生成編集、Web検索、GitHub読み取�
 
 ## 実行環境
 
-このrepoではQwenモデルとGradio画面を管理します。RunPodのライフサイクル管理とOpen WebUI連携は、別repoの [qwen-runpod-operations](https://github.com/moruku36/qwen-runpod-operations) で管理しています。RunPodの実GPU接続は検証中です。CPU・モック検証は有料RunPodセッションの成功を示すものではありません。
+このrepoではQwenモデルとGradio画面を管理します。RunPodのライフサイクル管理とOpen WebUI連携は、別repoの [qwen-runpod-operations](https://github.com/moruku36/qwen-runpod-operations) で管理しています。2026年10月9日、独立した小型モデルのPhase1試験で、Open WebUIからQwen2.5-1.5B-Instructの1回答を表示しました。[検証記録](docs/runpod-phase1-verification-2026-10-09.md)を参照してください。統合launcherと本アプリ全体のRunPod実機検証は引き続き未完了です。CPU・モック検証だけで有料RunPodセッションの成功を示すことはできません。
 
 ## Colabでまず使う
 
